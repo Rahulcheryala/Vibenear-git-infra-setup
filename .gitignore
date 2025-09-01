@@ -85,3 +85,5 @@ jspm_packages/
 
 # FuseBox cache
 .fusebox/
+
+.github/environments/*.yml

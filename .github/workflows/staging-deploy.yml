@@ -30,7 +30,7 @@ jobs:
 
       - name: Deploy to Staging
         run: |
-          echo "🚀 Deploying to staging environment..."
+          echo "🚀 Deploying to staging environment with ${{ secrets.DB_HOST }} database"
           # Add your deployment script here
 
       - name: Notify deployment
