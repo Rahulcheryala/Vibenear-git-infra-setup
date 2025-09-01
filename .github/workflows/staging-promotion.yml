@@ -1,0 +1,62 @@
+name: Promote to Staging Helper
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_pr:
+        description: "Create PR from develop to staging"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  promote-to-staging:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get commits since last staging merge
+        id: get_commits
+        run: |
+          # Get the last merge commit to staging
+          LAST_STAGING_COMMIT=$(git log staging..develop --oneline | tail -1 | cut -d' ' -f1)
+
+          if [ -z "$LAST_STAGING_COMMIT" ]; then
+            echo "No new commits to promote"
+            exit 0
+          fi
+
+          # Get feature branch names from commit messages
+          FEATURES=$(git log staging..develop --oneline --grep="feature/" --pretty=format:"%s" | grep -o "feature/[a-zA-Z0-9\-]*" | sort | uniq)
+
+          echo "features<<EOF" >> $GITHUB_OUTPUT
+          echo "$FEATURES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create staging promotion PR
+        if: inputs.create_pr == true
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: auto/staging-promotion
+          base: staging
+          title: "🚀 Promote features to staging"
+          body: |
+            ## Features included in this promotion:
+
+            ${{ steps.get_commits.outputs.features }}
+
+            ## Deployment Information:
+            - **Source**: develop branch
+            - **Target**: staging environment
+            - **Database**: Staging environment will use staging database
+            - **Auto-deploy**:  Yes (on merge)
+
+            This PR will automatically deploy to staging environment upon merge.

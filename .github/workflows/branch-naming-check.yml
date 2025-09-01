@@ -1,0 +1,43 @@
+name: Branch Naming Convention Check
+
+on:
+  pull_request:
+    branches: [develop]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-branch-name:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch name
+        run: |
+          branch_name="${{ github.head_ref }}"
+          echo "Checking branch name: $branch_name"
+
+          if [[ $branch_name =~ ^feature/[a-z0-9\-]+$ ]]; then
+            echo "Branch name follows the naming convention: feature/<branch-name>"
+            echo "Branch name is valid: $branch_name"
+          else
+            echo "Branch name does not follow the naming convention!"
+            echo ""
+            echo "BRANCH NAMING REQUIREMENTS:"
+            echo "  • Must start with 'feature/'"
+            echo "  • Must contain only lowercase letters, numbers, and hyphens"
+            echo "  • Example: feature/user-authentication"
+            echo ""
+            echo "TO FIX YOUR BRANCH NAME:"
+            echo "  1. Rename your current branch:"
+            echo "     git branch -m $branch_name feature/your-feature-name"
+            echo ""
+            echo "  2. Delete the old remote branch:"
+            echo "     git push origin --delete $branch_name"
+            echo ""
+            echo "  3. Push the renamed branch:"
+            echo "     git push origin feature/your-feature-name"
+            echo ""
+            echo "  4. Update your local branch to track the new remote:"
+            echo "     git branch --set-upstream-to=origin/feature/your-feature-name"
+            echo ""
+            echo "Replace 'your-feature-name' with a descriptive name for your feature"
+            exit 1
+          fi

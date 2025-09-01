@@ -1,0 +1,46 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy-production:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # - name: Setup Node.js (adjust for your tech stack)
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: "18"
+      #     cache: "npm"
+
+      # - name: Install dependencies
+      #   run: npm ci
+
+      # - name: Run tests
+      #   run: npm test
+
+      # - name: Build application
+      #   run: npm run build
+
+      - name: Deploy to Production
+        run: |
+          echo "🚀 Deploying to production environment..."
+          # Add your deployment script here
+
+      - name: Create deployment tag
+        run: |
+          TAG_NAME="v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          git tag $TAG_NAME
+          git push origin $TAG_NAME
+          echo "📋 Created deployment tag: $TAG_NAME"
+
+      - name: Notify deployment
+        run: |
+          echo "✅ Deployment to production completed successfully"
+          echo "🔗 Production URL: https://yourapp.com"

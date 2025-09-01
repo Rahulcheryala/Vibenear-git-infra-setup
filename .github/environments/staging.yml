@@ -1,0 +1,8 @@
+ENVIRONMENT: staging
+DB_HOST: staging-db.internal
+DB_NAME: myapp_staging
+DB_PORT: 5432
+NODE_ENV: staging
+LOG_LEVEL: info
+API_URL: https://api-staging.yourapp.com
+FRONTEND_URL: https://staging.yourapp.com
