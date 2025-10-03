@@ -113,12 +113,11 @@ jobs:
           printf "%s\n" "$NEW_COMMITS"
           echo ""
 
-          # Set outputs
+          # Set outputs (preserve existing_pr value from above)
           echo "promotion_needed=true" >> "$GITHUB_OUTPUT"
           echo "commit_count=$COMMIT_COUNT" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
-          echo "existing_pr=" >> "$GITHUB_OUTPUT"
           {
             echo "new_commits<<EOF"
             printf "%s\n" "$NEW_COMMITS"
@@ -146,7 +145,7 @@ jobs:
       - name: Ensure full fetch
         run: git fetch --all --prune --tags
 
-      - name: Create PR directly from staging
+      - name: Create or reuse PR from staging to main
         id: create_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -159,69 +158,102 @@ jobs:
           fi
 
           REPO="${GITHUB_REPOSITORY}"
+          echo "📝 Ensuring PR base=main head=staging"
 
-          echo "📝 Creating PR base=main head=staging"
-
-          # Check if PR from staging to main already exists
-          if gh pr view --base main --head staging --json number,url >/dev/null 2>&1; then
-            echo "ℹ️ PR already exists for staging→main. Fetching..."
-            PR_NUMBER="$(gh pr view --base main --head staging --json number --jq .number)"
-            PR_URL="$(gh pr view --base main --head staging --json url --jq .url)"
+          # 1) Reuse PR discovered in analysis, if present
+          if [ -n "${{ needs.commit-analysis.outputs.existing_pr }}" ]; then
+            PR_NUMBER="${{ needs.commit-analysis.outputs.existing_pr }}"
+            PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
             echo "✅ Reusing existing PR #$PR_NUMBER"
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+            echo "🔗 PR Link: $PR_URL"
+            exit 0
+          fi
+
+          # 2) Detect existing open PR using gh pr list (correct flags)
+          EXISTING_NUMBER="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' || true)"
+          if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
+            PR_NUMBER="$EXISTING_NUMBER"
+            PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
+            echo "✅ Reusing existing PR #$PR_NUMBER"
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+            echo "🔗 PR Link: $PR_URL"
+            exit 0
+          fi
+
+          # 3) Create PR body
+          BODY_CONTENT="## 🚀 Production Deployment
+
+          This PR promotes the staging environment to production.
+
+          ### 📋 Release Information
+          - **Release Tag**: \`${{ needs.commit-analysis.outputs.release_tag }}\`
+          - **Timestamp**: ${{ needs.commit-analysis.outputs.timestamp }}
+          - **Commit Count**: ${{ needs.commit-analysis.outputs.commit_count }} commits
+          - **Source**: \`staging\`
+          - **Target**: \`main\`
+          - **Triggered By**: @${{ github.actor }} via manual workflow dispatch
+
+          ### 📝 Features to be Deployed
+          \`\`\`text
+          ${{ needs.commit-analysis.outputs.new_commits }}
+          \`\`\`
+
+          ### 📒 Release Notes
+          ${{ inputs.release_notes }}
+
+          ### 🔄 What Happens on Merge
+          1. Squash merge into a single release commit
+          2. Tag \`${{ needs.commit-analysis.outputs.release_tag }}\` will be created (already pushed)
+          3. Production deployment triggered
+          4. Clean history: one commit per production release
+
+          ### ⚠️ Important
+          - Deploys to **PRODUCTION**
+          - Rollback = revert the single release commit
+          - Ensure all staging validations are complete
+
+          ### ✅ Pre-deployment Checklist
+          - [ ] Staging tests passed
+          - [ ] Code review complete
+          - [ ] DB migrations verified
+          - [ ] Release notes reviewed
+
+          ---
+          🔒 Requires multiple approvals.
+
+          👥 Reviewers: @rahulcheryala @your-senior-dev"
+
+          echo "🔧 Creating PR via gh api..."
+          set +e
+          CREATE_OUT="$(gh api -X POST "repos/${REPO}/pulls" \
+            -f title="$TITLE" \
+            -f head="staging" \
+            -f base="main" \
+            -f body="$BODY_CONTENT" \
+            --jq .number 2>&1)"
+          STATUS=$?
+          set -e
+
+          if [ $STATUS -ne 0 ] || [ -z "$CREATE_OUT" ] || [ "$CREATE_OUT" = "null" ]; then
+            echo "⚠️ PR creation failed, attempting to find existing PR (likely already open)..."
+            PR_NUMBER="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' || true)"
+            if [ -n "${PR_NUMBER:-}" ] && [ "${PR_NUMBER}" != "null" ]; then
+              PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
+              echo "✅ Reusing existing PR #$PR_NUMBER"
+              echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+              echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+              echo "🔗 PR Link: $PR_URL"
+            else
+              echo "❌ Unable to create or find existing PR. Original error:"
+              echo "$CREATE_OUT"
+              exit 1
+            fi
           else
-            # Create PR body
-            BODY_CONTENT="## 🚀 Production Deployment
-
-            This PR promotes the staging environment to production.
-
-            ### 📋 Release Information
-            - **Release Tag**: \`${{ needs.commit-analysis.outputs.release_tag }}\`
-            - **Timestamp**: ${{ needs.commit-analysis.outputs.timestamp }}
-            - **Commit Count**: ${{ needs.commit-analysis.outputs.commit_count }} commits
-            - **Source**: \`staging\`
-            - **Target**: \`main\`
-            - **Triggered By**: @${{ github.actor }} via manual workflow dispatch
-
-            ### 📝 Features to be Deployed
-            \`\`\`text
-            ${{ needs.commit-analysis.outputs.new_commits }}
-            \`\`\`
-
-            ### 📒 Release Notes
-            ${{ inputs.release_notes }}
-
-            ### 🔄 What Happens on Merge
-            1. Squash merge into a single release commit
-            2. Tag \`${{ needs.commit-analysis.outputs.release_tag }}\` will be created (already pushed)
-            3. Production deployment triggered
-            4. Clean history: one commit per production release
-
-            ### ⚠️ Important
-            - Deploys to **PRODUCTION**
-            - Rollback = revert the single release commit
-            - Ensure all staging validations are complete
-
-            ### ✅ Pre-deployment Checklist
-            - [ ] Staging tests passed
-            - [ ] Code review complete
-            - [ ] DB migrations verified
-            - [ ] Release notes reviewed
-
-            ---
-            🔒 Requires multiple approvals.
-
-            👥 Reviewers: @rahulcheryala @your-senior-dev"
-
-            echo "🔧 Creating PR via gh api..."
-            PR_NUMBER="$(gh api -X POST "repos/${REPO}/pulls" \
-              -f title="$TITLE" \
-              -f head="staging" \
-              -f base="main" \
-              -f body="$BODY_CONTENT" \
-              --jq .number)"
-
+            PR_NUMBER="$CREATE_OUT"
             PR_URL="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .html_url)"
-
             echo "🏷️ Adding labels..."
             printf '{"labels":["production","deployment","release","auto-generated"]}\n' > labels.json
             gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/labels" --input labels.json >/dev/null || true
@@ -231,11 +263,10 @@ jobs:
             gh api -X POST "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" --input reviewers.json >/dev/null || true
 
             echo "✅ PR created: #$PR_NUMBER"
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+            echo "🔗 PR Link: $PR_URL"
           fi
-
-          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
-          echo "🔗 PR Link: $PR_URL"
 
   create-release-tag:
     name: Create Release Tag
