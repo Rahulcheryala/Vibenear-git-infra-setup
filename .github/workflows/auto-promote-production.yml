@@ -211,33 +211,49 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+
           BR="auto/production-promotion-${{ github.run_number }}"
           TITLE="🚀 Production Release: ${{ needs.commit-analysis.outputs.release_tag }}"
           if [ -z "$TITLE" ] || [ "$TITLE" = "🚀 Production Release: " ]; then
             TITLE="🚀 Production Release"
           fi
 
+          REPO="${GITHUB_REPOSITORY}"
+
           echo "📝 Creating PR base=main head=${BR}"
-          # Try create; if it already exists, just read it
+
+          # If a PR for this head branch already exists, reuse it
           if gh pr view --base main --head "$BR" --json number,url >/dev/null 2>&1; then
-            echo "PR already exists for ${BR}. Fetching..."
+            echo "ℹ️ PR already exists for ${BR}. Fetching..."
             PR_NUMBER="$(gh pr view --base main --head "$BR" --json number --jq .number)"
             PR_URL="$(gh pr view --base main --head "$BR" --json url --jq .url)"
           else
-            PR_NUMBER="$(gh pr create \
-              --base main \
-              --head "$BR" \
-              --title "$TITLE" \
-              --body-file PR_BODY.md \
-              --label production --label deployment --label release --label auto-generated \
-              --reviewer rahulcheryala --reviewer your-senior-dev \
-              --json number --jq .number)"
-            PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
+            # Create the PR via REST API to avoid gh pr create --json incompatibility
+            # Body comes from the file you prepared earlier (PR_BODY.md)
+            BODY_CONTENT="$(cat PR_BODY.md)"
+
+            echo "🔧 Creating PR via gh api..."
+            PR_NUMBER="$(gh api -X POST "repos/${REPO}/pulls" \
+              -f title="$TITLE" \
+              -f head="$BR" \
+              -f base="main" \
+              -f body="$BODY_CONTENT" \
+              --jq .number)"
+
+            PR_URL="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .html_url)"
+
+            echo "🏷️ Adding labels..."
+            printf '{"labels":["production","deployment","release","auto-generated"]}\n' > labels.json
+            gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/labels" --input labels.json >/dev/null || true
+
+            echo "👥 Requesting reviewers..."
+            printf '{"reviewers":["rahulcheryala","your-senior-dev"]}\n' > reviewers.json
+            gh api -X POST "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" --input reviewers.json >/dev/null || true
           fi
 
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
-          echo "✅ PR created: #$PR_NUMBER ($PR_URL)"
+          echo "✅ PR created or reused: #$PR_NUMBER ($PR_URL)"
 
   create-release-tag:
     name: Create Release Tag
