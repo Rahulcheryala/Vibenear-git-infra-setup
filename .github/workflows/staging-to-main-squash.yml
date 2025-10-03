@@ -78,7 +78,6 @@ jobs:
           echo "final_squash_summary<<EOF" >> $GITHUB_OUTPUT
           echo "## 🚀 Final Release Squashing Plan" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
-          echo "**$COMMIT_COUNT commits** will be squashed into a single release commit:" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
           echo "### Release Information:" >> $GITHUB_OUTPUT
           echo "- **Release Tag**: \`$RELEASE_TAG\`" >> $GITHUB_OUTPUT
