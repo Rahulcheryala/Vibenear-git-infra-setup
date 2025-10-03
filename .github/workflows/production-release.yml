@@ -1,18 +1,25 @@
-name: Auto Promote to Production
+name: Production Release
+run-name: Production Release by @${{ github.actor }}
 
 on:
   workflow_dispatch:
     inputs:
-      create_pr:
-        description: "Create PR from staging to main for production deployment"
+      branch:
+        description: "Select the source branch for production promotion"
         required: true
-        default: true
-        type: boolean
+        default: "staging"
+        type: choice
+        options:
+          - "staging"
       release_notes:
         description: "Release notes for this production deployment"
         required: false
         default: ""
         type: string
+
+description: |
+  Manually triggered workflow to create or update a Pull Request from `staging` to `main`
+  for production deployment, including release tag creation and detailed PR messaging.
 
 permissions:
   contents: write
@@ -129,7 +136,7 @@ jobs:
     name: Create Production PR
     runs-on: ubuntu-latest
     needs: commit-analysis
-    if: needs.commit-analysis.outputs.promotion_needed == 'true' && inputs.create_pr
+    if: needs.commit-analysis.outputs.promotion_needed == 'true'
     outputs:
       pr_number: ${{ steps.create_pr.outputs.pr_number }}
       pr_url: ${{ steps.create_pr.outputs.pr_url }}
