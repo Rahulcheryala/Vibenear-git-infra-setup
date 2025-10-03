@@ -100,8 +100,8 @@ jobs:
   release-tagging:
     name: Release Tagging
     runs-on: ubuntu-latest
-    needs: analyze-commits
-    if: needs.analyze-commits.outputs.has_commits == 'true'
+    needs: commit-analysis
+    if: needs.commit-analysis.outputs.has_commits == 'true'
 
     steps:
       - name: Checkout staging branch
@@ -113,7 +113,7 @@ jobs:
 
       - name: Create and push release tag
         env:
-          RELEASE_TAG: ${{ needs.analyze-commits.outputs.release_tag }}
+          RELEASE_TAG: ${{ needs.commit-analysis.outputs.release_tag }}
         run: |
           echo "🚀 Preparing release information for production deployment..."
           echo "📋 Release tag: $RELEASE_TAG"
@@ -132,14 +132,14 @@ jobs:
   release-notes:
     name: Release Notes
     runs-on: ubuntu-latest
-    needs: analyze-commits
-    if: needs.analyze-commits.outputs.has_commits == 'true'
+    needs: commit-analysis
+    if: needs.commit-analysis.outputs.has_commits == 'true'
 
     steps:
       - name: Post release analysis comment
         uses: actions/github-script@v7
         env:
-          FINAL_SQUASH_SUMMARY: ${{ needs.analyze-commits.outputs.final_squash_summary }}
+          FINAL_SQUASH_SUMMARY: ${{ needs.commit-analysis.outputs.final_squash_summary }}
         with:
           script: |
             const summary = process.env.FINAL_SQUASH_SUMMARY;
@@ -181,8 +181,8 @@ jobs:
   workflow-summary:
     name: Workflow Summary
     runs-on: ubuntu-latest
-    needs: [analyze-commits, create-release-tag, comment-on-pr]
-    if: always() && needs.analyze-commits.outputs.has_commits == 'true'
+    needs: [commit-analysis, release-tagging, release-notes]
+    if: always() && needs.commit-analysis.outputs.has_commits == 'true'
 
     steps:
       - name: Display workflow summary
@@ -202,7 +202,7 @@ jobs:
           echo "  3. GitHub will automatically squash commits on merge"
           echo "  4. Production deployment will trigger automatically"
           echo ""
-          echo "🏷️ Release Tag: ${{ needs.analyze-commits.outputs.release_tag }}"
-          echo "⏰ Timestamp: ${{ needs.analyze-commits.outputs.timestamp }}"
-          echo "📊 Commit Count: ${{ needs.analyze-commits.outputs.commit_count }}"
+          echo "🏷️ Release Tag: ${{ needs.commit-analysis.outputs.release_tag }}"
+          echo "⏰ Timestamp: ${{ needs.commit-analysis.outputs.timestamp }}"
+          echo "📊 Commit Count: ${{ needs.commit-analysis.outputs.commit_count }}"
           echo ""
