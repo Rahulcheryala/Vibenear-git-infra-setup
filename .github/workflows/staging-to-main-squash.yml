@@ -72,12 +72,14 @@ jobs:
 
       - name: Prepare release information
         if: steps.analyze_staging_commits.outputs.final_squash_summary != ''
+        env:
+          RELEASE_TAG: ${{ steps.analyze_staging_commits.outputs.release_tag }}
         run: |
           echo "🚀 Preparing release information for production deployment..."
 
           # Create and push the release tag
-          git tag ${{ steps.analyze_staging_commits.outputs.release_tag }}
-          git push origin ${{ steps.analyze_staging_commits.outputs.release_tag }}
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
 
           echo "✅ Release tag created: ${{ steps.analyze_staging_commits.outputs.release_tag }}"
           echo "📋 GitHub's built-in squash will handle commit squashing on merge"
