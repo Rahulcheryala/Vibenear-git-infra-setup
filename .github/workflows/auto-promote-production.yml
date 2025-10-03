@@ -180,6 +180,8 @@ jobs:
             your-senior-dev
 
       - name: Get PR number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "🔗 Getting created PR number..."
           PR_NUMBER=$(gh pr list --base main --head auto/production-promotion-${{ github.run_number }} --state open --json number --jq '.[0].number')
