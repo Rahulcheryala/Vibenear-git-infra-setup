@@ -124,7 +124,7 @@ jobs:
           echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
           echo "existing_pr=" >> "$GITHUB_OUTPUT"
           {
-            echo "new_commits<<'EOF'"
+            echo "new_commits<<EOF"
             printf "%s\n" "$NEW_COMMITS"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
