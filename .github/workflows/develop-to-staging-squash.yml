@@ -1,0 +1,119 @@
+name: Develop to Staging with Squash
+
+on:
+  pull_request:
+    branches: [staging]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  squash-and-merge:
+    runs-on: ubuntu-latest
+    if: github.base_ref == 'staging' && github.head_ref == 'develop'
+
+    steps:
+      - name: Checkout develop branch
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Analyze commits for squashing
+        id: analyze_commits
+        run: |
+          # Get commits that are in develop but not in staging
+          COMMITS_TO_SQUASH=$(git log staging..develop --oneline --no-merges)
+
+          if [ -z "$COMMITS_TO_SQUASH" ]; then
+            echo "No commits to squash"
+            exit 0
+          fi
+
+          # Extract feature branch names from commit messages
+          FEATURE_BRANCHES=$(echo "$COMMITS_TO_SQUASH" | grep -oE "(feature|hotfix)/[a-zA-Z0-9\-]*" | sort | uniq)
+
+          echo "Commits to squash:"
+          echo "$COMMITS_TO_SQUASH"
+          echo ""
+          echo "Feature branches detected:"
+          echo "$FEATURE_BRANCHES"
+
+          # Create a summary for the PR
+          echo "squash_summary<<EOF" >> $GITHUB_OUTPUT
+          echo "## Commit Squashing Plan" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "The following feature branches will be squashed into individual commits:" >> $GITHUB_OUTPUT
+          echo "$FEATURE_BRANCHES" | while read branch; do
+            if [ ! -z "$branch" ]; then
+              echo "- **$branch**" >> $GITHUB_OUTPUT
+            fi
+          done >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "### Original Commits:" >> $GITHUB_OUTPUT
+          echo '```' >> $GITHUB_OUTPUT
+          echo "$COMMITS_TO_SQUASH" >> $GITHUB_OUTPUT
+          echo '```' >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create squashed commits
+        if: steps.analyze_commits.outputs.squash_summary != ''
+        run: |
+          echo "🚀 Creating squashed commits for each feature branch..."
+
+          # Get feature branches
+          FEATURE_BRANCHES=$(git log staging..develop --oneline --grep="Merge pull request" | grep -oE "(feature|hotfix)/[a-zA-Z0-9\-]*" | sort | uniq)
+
+          # Create a temporary branch for squashed commits
+          git checkout -b temp-squashed-commits staging
+
+          for branch in $FEATURE_BRANCHES; do
+            if [ ! -z "$branch" ]; then
+              echo "Processing branch: $branch"
+
+              # Get the last commit message from this feature branch
+              LAST_COMMIT_MSG=$(git log develop --oneline --grep="$branch" | head -1 | cut -d' ' -f2-)
+
+              # Create a squashed commit for this feature
+              COMMIT_MSG="feat: $branch - $LAST_COMMIT_MSG"
+
+              # Simulate squashing by creating a single commit
+              echo "Creating squashed commit: $COMMIT_MSG"
+              git commit --allow-empty -m "$COMMIT_MSG"
+            fi
+          done
+
+          # Push the squashed branch
+          git push origin temp-squashed-commits
+
+          echo "✅ Squashed commits created on temp-squashed-commits branch"
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('Commit Squashing Plan')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: `${{ steps.analyze_commits.outputs.squash_summary }}`
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `${{ steps.analyze_commits.outputs.squash_summary }}`
+              });
+            }

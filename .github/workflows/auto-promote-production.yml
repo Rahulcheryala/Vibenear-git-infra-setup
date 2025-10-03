@@ -1,0 +1,125 @@
+name: Auto Promote to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_pr:
+        description: "Create PR from staging to main for production deployment"
+        required: true
+        default: true
+        type: boolean
+      release_notes:
+        description: "Release notes for this production deployment"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  auto-promote-production:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if production promotion is needed
+        id: check_production_promotion
+        run: |
+          # Check if there are new commits in staging that are not in main
+          NEW_COMMITS=$(git log main..staging --oneline --no-merges)
+
+          if [ -z "$NEW_COMMITS" ]; then
+            echo "No new commits to promote to production"
+            echo "promotion_needed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check if there's already an open PR from staging to main
+          EXISTING_PR=$(gh pr list --base main --head staging --state open --json number --jq '.[0].number')
+
+          if [ ! -z "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
+            echo "PR #$EXISTING_PR already exists from staging to main"
+            echo "promotion_needed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "New commits found, production promotion needed"
+          echo "promotion_needed=true" >> $GITHUB_OUTPUT
+
+          # Count commits and generate release info
+          COMMIT_COUNT=$(echo "$NEW_COMMITS" | wc -l)
+          TIMESTAMP=$(date +'%Y-%m-%d %H:%M:%S UTC')
+          RELEASE_TAG="v$(date +'%Y.%m.%d')-$(date +'%H%M')"
+
+          echo "commit_count=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+          echo "new_commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$NEW_COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create production promotion PR
+        if: steps.check_production_promotion.outputs.promotion_needed == 'true' && inputs.create_pr == true
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: auto/production-promotion-${{ github.run_number }}
+          base: main
+          title: "🚀 Production Release: ${{ steps.check_production_promotion.outputs.release_tag }}"
+          body: |
+            ## 🚀 Production Deployment
+
+            This PR promotes the staging environment to production.
+
+            ### 📋 Release Information:
+
+            - **Release Tag**: `${{ steps.check_production_promotion.outputs.release_tag }}`
+            - **Timestamp**: ${{ steps.check_production_promotion.outputs.timestamp }}
+            - **Commit Count**: ${{ steps.check_production_promotion.outputs.commit_count }} commits
+            - **Source**: `staging` branch
+            - **Target**: `main` branch (production)
+
+            ### 📝 Commits to be Deployed:
+
+            ```bash
+            ${{ steps.check_production_promotion.outputs.new_commits }}
+            ```
+
+            ### 🔄 What Happens on Merge:
+
+            1. **Final Squashing**: All commits will be squashed into a single release commit
+            2. **Tag Creation**: Release tag `${{ steps.check_production_promotion.outputs.release_tag }}` will be created
+            3. **Production Deployment**: Automatic deployment to production environment
+            4. **Clean History**: Production history will contain one commit per release
+
+            ### 📋 Release Notes:
+
+            ${{ inputs.release_notes || 'No specific release notes provided.' }}
+
+            ### ⚠️ Important Notes:
+
+            - This will deploy to **PRODUCTION** environment
+            - All changes will be squashed into a single commit for clean history
+            - Rollback will be possible by reverting the single release commit
+            - Ensure all staging tests have passed before merging
+
+            ---
+
+            **🔒 Production Deployment**: This PR requires **multiple approvals** before merging.
+          labels: |
+            production
+            deployment
+            release
+
+      - name: Notify production promotion creation
+        if: steps.check_production_promotion.outputs.promotion_needed == 'true' && inputs.create_pr == true
+        run: |
+          echo "✅ Production promotion PR created successfully"
+          echo "🏷️ Release tag: ${{ steps.check_production_promotion.outputs.release_tag }}"
+          echo "🔗 Check the PR to review and merge when ready"
+          echo "⚠️ Remember: This will deploy to PRODUCTION!"
