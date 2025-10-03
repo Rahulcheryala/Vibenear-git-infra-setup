@@ -43,9 +43,9 @@ jobs:
 
           # Create a summary for the PR
           echo "squash_summary<<EOF" >> $GITHUB_OUTPUT
-          echo "## Commit Squashing Plan" >> $GITHUB_OUTPUT
+          echo "## 📋 Staging Promotion Analysis" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
-          echo "The following feature branches will be squashed into individual commits:" >> $GITHUB_OUTPUT
+          echo "The following feature branches will be promoted to staging:" >> $GITHUB_OUTPUT
           echo "$FEATURE_BRANCHES" | while read branch; do
             if [ ! -z "$branch" ]; then
               echo "- **$branch**" >> $GITHUB_OUTPUT
@@ -58,37 +58,13 @@ jobs:
           echo '```' >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create squashed commits
+      - name: Prepare staging promotion information
         if: steps.analyze_commits.outputs.squash_summary != ''
         run: |
-          echo "🚀 Creating squashed commits for each feature branch..."
+          echo "🚀 Preparing staging promotion information..."
 
-          # Get feature branches
-          FEATURE_BRANCHES=$(git log staging..develop --oneline --grep="Merge pull request" | grep -oE "(feature|hotfix)/[a-zA-Z0-9\-]*" | sort | uniq)
-
-          # Create a temporary branch for squashed commits
-          git checkout -b temp-squashed-commits staging
-
-          for branch in $FEATURE_BRANCHES; do
-            if [ ! -z "$branch" ]; then
-              echo "Processing branch: $branch"
-
-              # Get the last commit message from this feature branch
-              LAST_COMMIT_MSG=$(git log develop --oneline --grep="$branch" | head -1 | cut -d' ' -f2-)
-
-              # Create a squashed commit for this feature
-              COMMIT_MSG="feat: $branch - $LAST_COMMIT_MSG"
-
-              # Simulate squashing by creating a single commit
-              echo "Creating squashed commit: $COMMIT_MSG"
-              git commit --allow-empty -m "$COMMIT_MSG"
-            fi
-          done
-
-          # Push the squashed branch
-          git push origin temp-squashed-commits
-
-          echo "✅ Squashed commits created on temp-squashed-commits branch"
+          echo "✅ Staging promotion analysis completed"
+          echo "📋 GitHub's built-in squash will handle commit squashing on merge"
 
       - name: Comment on PR
         uses: actions/github-script@v7

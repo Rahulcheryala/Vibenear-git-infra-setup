@@ -36,8 +36,8 @@ jobs:
           COMMIT_COUNT=$(echo "$COMMITS_TO_FINAL_SQUASH" | wc -l)
 
           # Generate release message with timestamp
-          TIMESTAMP=$(date +'%Y-%m-%d %H:%M:%S UTC')
-          RELEASE_TAG="release-$(date +'%Y%m%d-%H%M%S')"
+          TIMESTAMP=$(date +'%d/%m/%Y %H:%M:%S UTC')
+          RELEASE_TAG="release-$(date +'%d/%m/%Y_%H:%M:%S')"
 
           echo "Commits to be squashed into single release commit:"
           echo "$COMMITS_TO_FINAL_SQUASH"
@@ -64,36 +64,23 @@ jobs:
           echo "### Final Commit Message:" >> $GITHUB_OUTPUT
           echo "\`release: Production deployment $TIMESTAMP ($RELEASE_TAG)\`" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
-          echo "⚠️ **Note**: This will create a clean production history with a single commit per release for easy rollbacks." >> $GITHUB_OUTPUT
+          echo "⚠️ **Note**: GitHub's built-in squash merge will create a clean production history with a single commit per release for easy rollbacks." >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
           echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
 
-      - name: Create final squashed commit
+      - name: Prepare release information
         if: steps.analyze_staging_commits.outputs.final_squash_summary != ''
         run: |
-          echo "🚀 Creating final squashed commit for production release..."
-
-          # Create a temporary branch for the final squashed commit
-          git checkout -b temp-final-squash main
-
-          # Create the final release commit message
-          FINAL_COMMIT_MSG="release: Production deployment ${{ steps.analyze_staging_commits.outputs.timestamp }} (${{ steps.analyze_staging_commits.outputs.release_tag }})"
-
-          # Simulate final squashing by creating a single commit
-          echo "Creating final release commit: $FINAL_COMMIT_MSG"
-          git commit --allow-empty -m "$FINAL_COMMIT_MSG"
+          echo "🚀 Preparing release information for production deployment..."
 
           # Create and push the release tag
           git tag ${{ steps.analyze_staging_commits.outputs.release_tag }}
           git push origin ${{ steps.analyze_staging_commits.outputs.release_tag }}
 
-          # Push the squashed branch
-          git push origin temp-final-squash
-
-          echo "✅ Final squashed commit created on temp-final-squash branch"
-          echo "📋 Release tag created: ${{ steps.analyze_staging_commits.outputs.release_tag }}"
+          echo "✅ Release tag created: ${{ steps.analyze_staging_commits.outputs.release_tag }}"
+          echo "📋 GitHub's built-in squash will handle commit squashing on merge"
 
       - name: Comment on PR
         uses: actions/github-script@v7
