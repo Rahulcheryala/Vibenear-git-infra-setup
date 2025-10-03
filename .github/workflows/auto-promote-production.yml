@@ -213,11 +213,14 @@ jobs:
           set -euo pipefail
           BR="auto/production-promotion-${{ github.run_number }}"
           TITLE="🚀 Production Release: ${{ needs.commit-analysis.outputs.release_tag }}"
+          if [ -z "$TITLE" ] || [ "$TITLE" = "🚀 Production Release: " ]; then
+            TITLE="🚀 Production Release"
+          fi
 
           echo "📝 Creating PR base=main head=${BR}"
           # Try create; if it already exists, just read it
           if gh pr view --base main --head "$BR" --json number,url >/dev/null 2>&1; then
-            echo "ℹ️ PR already exists for ${BR}. Fetching..."
+            echo "PR already exists for ${BR}. Fetching..."
             PR_NUMBER="$(gh pr view --base main --head "$BR" --json number --jq .number)"
             PR_URL="$(gh pr view --base main --head "$BR" --json url --jq .url)"
           else
