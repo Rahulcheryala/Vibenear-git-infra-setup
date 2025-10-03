@@ -15,7 +15,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -110,6 +110,13 @@ jobs:
       pr_number: ${{ steps.create_pr.outputs.pr_number }}
 
     steps:
+      - name: Checkout staging (for diff context if needed)
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create production promotion PR
         id: create_pr
         uses: peter-evans/create-pull-request@v5
