@@ -158,32 +158,7 @@ jobs:
           fi
 
           REPO="${GITHUB_REPOSITORY}"
-          echo "📝 Ensuring PR base=main head=staging"
 
-          # 1) Reuse PR discovered in analysis, if present
-          if [ -n "${{ needs.commit-analysis.outputs.existing_pr }}" ]; then
-            PR_NUMBER="${{ needs.commit-analysis.outputs.existing_pr }}"
-            PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
-            echo "✅ Reusing existing PR #$PR_NUMBER"
-            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
-            echo "🔗 PR Link: $PR_URL"
-            exit 0
-          fi
-
-          # 2) Detect existing open PR using gh pr list (correct flags)
-          EXISTING_NUMBER="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' || true)"
-          if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
-            PR_NUMBER="$EXISTING_NUMBER"
-            PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
-            echo "✅ Reusing existing PR #$PR_NUMBER"
-            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
-            echo "🔗 PR Link: $PR_URL"
-            exit 0
-          fi
-
-          # 3) Create PR body
           BODY_CONTENT="## 🚀 Production Deployment
 
           This PR promotes the staging environment to production.
@@ -226,6 +201,52 @@ jobs:
 
           👥 Reviewers: @rahulcheryala @your-senior-dev"
 
+          echo "📝 Ensuring PR base=main head=staging"
+
+          # 1) Reuse PR discovered in analysis, if present, and UPDATE it
+          if [ -n "${{ needs.commit-analysis.outputs.existing_pr }}" ]; then
+            PR_NUMBER="${{ needs.commit-analysis.outputs.existing_pr }}"
+            echo "✅ Reusing existing PR #$PR_NUMBER — updating title/body with latest analysis..."
+            gh api -X PATCH "repos/${REPO}/pulls/${PR_NUMBER}" \
+              -f title="$TITLE" \
+              -f body="$BODY_CONTENT" >/dev/null
+
+            # Best-effort labels/reviewers (idempotent)
+            printf '{"labels":["production","deployment","release","auto-generated"]}\n' > labels.json
+            gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/labels" --input labels.json >/dev/null || true
+            printf '{"reviewers":["rahulcheryala","your-senior-dev"]}\n' > reviewers.json
+            gh api -X POST "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" --input reviewers.json >/dev/null || true
+
+            PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+            echo "🔗 PR Link: $PR_URL"
+            exit 0
+          fi
+
+          # 2) Detect existing open PR and UPDATE it
+          EXISTING_NUMBER="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' || true)"
+          if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
+            PR_NUMBER="$EXISTING_NUMBER"
+            echo "✅ Reusing existing PR #$PR_NUMBER — updating title/body with latest analysis..."
+            gh api -X PATCH "repos/${REPO}/pulls/${PR_NUMBER}" \
+              -f title="$TITLE" \
+              -f body="$BODY_CONTENT" >/dev/null
+
+            # Best-effort labels/reviewers (idempotent)
+            printf '{"labels":["production","deployment","release","auto-generated"]}\n' > labels.json
+            gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/labels" --input labels.json >/dev/null || true
+            printf '{"reviewers":["rahulcheryala","your-senior-dev"]}\n' > reviewers.json
+            gh api -X POST "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" --input reviewers.json >/dev/null || true
+
+            PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+            echo "🔗 PR Link: $PR_URL"
+            exit 0
+          fi
+
+          # 3) Create PR if none exists
           echo "🔧 Creating PR via gh api..."
           set +e
           CREATE_OUT="$(gh api -X POST "repos/${REPO}/pulls" \
@@ -241,8 +262,11 @@ jobs:
             echo "⚠️ PR creation failed, attempting to find existing PR (likely already open)..."
             PR_NUMBER="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' || true)"
             if [ -n "${PR_NUMBER:-}" ] && [ "${PR_NUMBER}" != "null" ]; then
+              echo "✅ Reusing existing PR #$PR_NUMBER — updating title/body with latest analysis..."
+              gh api -X PATCH "repos/${REPO}/pulls/${PR_NUMBER}" \
+                -f title="$TITLE" \
+                -f body="$BODY_CONTENT" >/dev/null
               PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
-              echo "✅ Reusing existing PR #$PR_NUMBER"
               echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
               echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
               echo "🔗 PR Link: $PR_URL"
