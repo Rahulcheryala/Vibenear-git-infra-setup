@@ -6,9 +6,18 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  final-squash-and-merge:
+  # Job 1: Setup and Analysis
+  commit-analysis:
+    name: Commit Analysis
     runs-on: ubuntu-latest
     if: github.base_ref == 'main' && github.head_ref == 'staging'
+    outputs:
+      has_commits: ${{ steps.analyze.outputs.has_commits }}
+      commit_count: ${{ steps.analyze.outputs.commit_count }}
+      release_tag: ${{ steps.analyze.outputs.release_tag }}
+      timestamp: ${{ steps.analyze.outputs.timestamp }}
+      commits_list: ${{ steps.analyze.outputs.commits_list }}
+      final_squash_summary: ${{ steps.analyze.outputs.final_squash_summary }}
 
     steps:
       - name: Checkout staging and main branches
@@ -25,7 +34,7 @@ jobs:
           echo "✅ Main branch fetched successfully"
 
       - name: Analyze staging commits for final squash
-        id: analyze_staging_commits
+        id: analyze
         run: |
           echo "🔍 Analyzing commits in staging branch that are not in main..."
 
@@ -35,6 +44,7 @@ jobs:
           if [ -z "$COMMITS_TO_FINAL_SQUASH" ]; then
             echo "✅ No new commits found in staging branch"
             echo "📋 Staging and main branches are in sync"
+            echo "has_commits=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -54,11 +64,20 @@ jobs:
           echo "$COMMITS_TO_FINAL_SQUASH"
           echo ""
 
+          # Set outputs
+          echo "has_commits=true" >> $GITHUB_OUTPUT
+          echo "commit_count=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+
+          echo "commits_list<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS_TO_FINAL_SQUASH" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
           # Create summary for the PR
           echo "final_squash_summary<<EOF" >> $GITHUB_OUTPUT
           echo "## 🚀 Final Release Squashing Plan" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
-          echo "**$COMMIT_COUNT commits** will be squashed into a single release commit:" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
           echo "### Release Information:" >> $GITHUB_OUTPUT
           echo "- **Release Tag**: \`$RELEASE_TAG\`" >> $GITHUB_OUTPUT
@@ -76,13 +95,24 @@ jobs:
           echo "⚠️ **Note**: GitHub's built-in squash merge will create a clean production history with a single commit per release for easy rollbacks." >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
-          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+  # Job 2: Create Release Tag
+  release-tagging:
+    name: Release Tagging
+    runs-on: ubuntu-latest
+    needs: commit-analysis
+    if: needs.commit-analysis.outputs.has_commits == 'true'
 
-      - name: Prepare release information
-        if: steps.analyze_staging_commits.outputs.final_squash_summary != ''
+    steps:
+      - name: Checkout staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push release tag
         env:
-          RELEASE_TAG: ${{ steps.analyze_staging_commits.outputs.release_tag }}
+          RELEASE_TAG: ${{ needs.commit-analysis.outputs.release_tag }}
         run: |
           echo "🚀 Preparing release information for production deployment..."
           echo "📋 Release tag: $RELEASE_TAG"
@@ -97,10 +127,18 @@ jobs:
           echo "📋 GitHub's built-in squash merge will handle commit squashing when PR is merged"
           echo "🔄 Production deployment will trigger automatically after merge"
 
-      - name: Comment on PR
+  # Job 3: Comment on PR
+  release-notes:
+    name: Release Notes
+    runs-on: ubuntu-latest
+    needs: commit-analysis
+    if: needs.commit-analysis.outputs.has_commits == 'true'
+
+    steps:
+      - name: Post release analysis comment
         uses: actions/github-script@v7
         env:
-          FINAL_SQUASH_SUMMARY: ${{ steps.analyze_staging_commits.outputs.final_squash_summary }}
+          FINAL_SQUASH_SUMMARY: ${{ needs.commit-analysis.outputs.final_squash_summary }}
         with:
           script: |
             const summary = process.env.FINAL_SQUASH_SUMMARY;
@@ -138,8 +176,15 @@ jobs:
               console.log('✅ Bot comment created successfully');
             }
 
-      - name: Workflow Summary
-        if: steps.analyze_staging_commits.outputs.final_squash_summary != ''
+  # Job 4: Workflow Summary
+  workflow-summary:
+    name: Workflow Summary
+    runs-on: ubuntu-latest
+    needs: [commit-analysis, release-tagging, release-notes]
+    if: always() && needs.commit-analysis.outputs.has_commits == 'true'
+
+    steps:
+      - name: Display workflow summary
         run: |
           echo ""
           echo "================================================"
@@ -156,6 +201,7 @@ jobs:
           echo "  3. GitHub will automatically squash commits on merge"
           echo "  4. Production deployment will trigger automatically"
           echo ""
-          echo "🏷️ Release Tag: ${{ steps.analyze_staging_commits.outputs.release_tag }}"
-          echo "⏰ Timestamp: ${{ steps.analyze_staging_commits.outputs.timestamp }}"
+          echo "🏷️ Release Tag: ${{ needs.commit-analysis.outputs.release_tag }}"
+          echo "⏰ Timestamp: ${{ needs.commit-analysis.outputs.timestamp }}"
+          echo "📊 Commit Count: ${{ needs.commit-analysis.outputs.commit_count }}"
           echo ""
