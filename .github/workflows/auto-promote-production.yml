@@ -120,7 +120,7 @@ jobs:
           echo "existing_pr=" >> "$GITHUB_OUTPUT"
 
           {
-            echo "new_commits<<'EOF'"
+            echo "new_commits<<EOF"
             echo "$NEW_COMMITS"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
