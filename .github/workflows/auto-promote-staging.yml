@@ -1,0 +1,106 @@
+name: Auto Promote to Staging
+
+on:
+  push:
+    branches: [develop]
+
+jobs:
+  auto-promote-staging:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout develop and staging branches
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch staging branch
+        run: git fetch origin staging:staging
+
+      - name: Check if staging promotion is needed
+        id: check_promotion
+        run: |
+          # Check if there are new commits in develop that are not in staging
+          NEW_COMMITS=$(git log staging..develop --oneline --no-merges)
+
+          if [ -z "$NEW_COMMITS" ]; then
+            echo "No new commits to promote to staging"
+            echo "promotion_needed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check if there's already an open PR from develop to staging
+          EXISTING_PR=$(gh pr list --base staging --head develop --state open --json number --jq '.[0].number')
+
+          if [ ! -z "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
+            echo "PR #$EXISTING_PR already exists from develop to staging"
+            echo "promotion_needed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "New commits found, promotion needed"
+          echo "promotion_needed=true" >> $GITHUB_OUTPUT
+
+          # Get feature branches from commit messages
+          FEATURES=$(echo "$NEW_COMMITS" | grep -oE "(feature|hotfix)/[a-zA-Z0-9\-]*" | sort | uniq)
+
+          echo "features<<EOF" >> $GITHUB_OUTPUT
+          echo "$FEATURES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "new_commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$NEW_COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create staging promotion PR
+        if: steps.check_promotion.outputs.promotion_needed == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: auto/staging-promotion-${{ github.run_number }}
+          base: staging
+          title: "🚀 Auto-promote: Develop to Staging"
+          body: |
+            ## 📋 Automated Staging Promotion
+
+            This PR was automatically created to promote changes from `develop` to `staging`.
+
+            ### 🔄 Features Included:
+
+            ${{ steps.check_promotion.outputs.features }}
+
+            ### 📝 New Commits:
+
+            ```bash
+            ${{ steps.check_promotion.outputs.new_commits }}
+            ```
+
+            ### 🚀 Deployment Information:
+
+            - **Source**: `develop` branch
+            - **Target**: `staging` environment
+            - **Auto-deploy**: ✅ Yes (triggers on merge)
+            - **Commit Squashing**: ✅ Yes (feature branches will be squashed)
+
+            ### 🔍 What Happens Next:
+
+            1. **Review**: This PR requires review before merging
+            2. **Squashing**: Feature commits will be automatically squashed
+            3. **Deployment**: Staging deployment will trigger automatically on merge
+            4. **Testing**: Staging environment will be updated for QA testing
+
+            ---
+
+            **⚠️ Important**: This is an automated promotion. Please review the changes carefully before merging.
+          labels: |
+            automated
+            staging-promotion
+            deployment
+
+      - name: Notify promotion creation
+        if: steps.check_promotion.outputs.promotion_needed == 'true'
+        run: |
+          echo "✅ Staging promotion PR created successfully"
+          echo "🔗 Check the PR to review and merge when ready"

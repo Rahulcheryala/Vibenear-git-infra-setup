@@ -1,0 +1,161 @@
+name: Staging to Main with Final Squash
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  final-squash-and-merge:
+    runs-on: ubuntu-latest
+    if: github.base_ref == 'main' && github.head_ref == 'staging'
+
+    steps:
+      - name: Checkout staging and main branches
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch main branch
+        run: |
+          echo "📥 Fetching main branch for comparison..."
+          git fetch origin main:main
+          echo "✅ Main branch fetched successfully"
+
+      - name: Analyze staging commits for final squash
+        id: analyze_staging_commits
+        run: |
+          echo "🔍 Analyzing commits in staging branch that are not in main..."
+
+          # Get commits that are in staging but not in main
+          COMMITS_TO_FINAL_SQUASH=$(git log main..staging --oneline --no-merges)
+
+          if [ -z "$COMMITS_TO_FINAL_SQUASH" ]; then
+            echo "✅ No new commits found in staging branch"
+            echo "📋 Staging and main branches are in sync"
+            exit 0
+          fi
+
+          # Count the number of commits to be squashed
+          COMMIT_COUNT=$(echo "$COMMITS_TO_FINAL_SQUASH" | wc -l)
+
+          # Generate release message with timestamp
+          TIMESTAMP=$(date +'%d/%m/%Y %H:%M:%S UTC')
+          RELEASE_TAG="release_$(date +'%d-%m-%Y_%H.%M.%S')"
+
+          echo "📊 Analysis Results:"
+          echo "  • Commits to be squashed: $COMMIT_COUNT"
+          echo "  • Release tag: $RELEASE_TAG"
+          echo "  • Timestamp: $TIMESTAMP"
+          echo ""
+          echo "📝 Commits to be squashed into single release commit:"
+          echo "$COMMITS_TO_FINAL_SQUASH"
+          echo ""
+
+          # Create summary for the PR
+          echo "final_squash_summary<<EOF" >> $GITHUB_OUTPUT
+          echo "## 🚀 Final Release Squashing Plan" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "**$COMMIT_COUNT commits** will be squashed into a single release commit:" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "### Release Information:" >> $GITHUB_OUTPUT
+          echo "- **Release Tag**: \`$RELEASE_TAG\`" >> $GITHUB_OUTPUT
+          echo "- **Timestamp**: $TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "- **Commit Count**: $COMMIT_COUNT" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "### Commits to be Squashed:" >> $GITHUB_OUTPUT
+          echo '```' >> $GITHUB_OUTPUT
+          echo "$COMMITS_TO_FINAL_SQUASH" >> $GITHUB_OUTPUT
+          echo '```' >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "### Final Commit Message:" >> $GITHUB_OUTPUT
+          echo "\`release: Production deployment $TIMESTAMP ($RELEASE_TAG)\`" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "⚠️ **Note**: GitHub's built-in squash merge will create a clean production history with a single commit per release for easy rollbacks." >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+
+      - name: Prepare release information
+        if: steps.analyze_staging_commits.outputs.final_squash_summary != ''
+        env:
+          RELEASE_TAG: ${{ steps.analyze_staging_commits.outputs.release_tag }}
+        run: |
+          echo "🚀 Preparing release information for production deployment..."
+          echo "📋 Release tag: $RELEASE_TAG"
+          echo ""
+
+          echo "🏷️ Creating and pushing release tag..."
+          # Create and push the release tag
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+
+          echo "✅ Release tag created and pushed successfully: $RELEASE_TAG"
+          echo "📋 GitHub's built-in squash merge will handle commit squashing when PR is merged"
+          echo "🔄 Production deployment will trigger automatically after merge"
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        env:
+          FINAL_SQUASH_SUMMARY: ${{ steps.analyze_staging_commits.outputs.final_squash_summary }}
+        with:
+          script: |
+            const summary = process.env.FINAL_SQUASH_SUMMARY;
+
+            // Get existing comments on the PR
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            // Find existing bot comment about release squashing
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('Final Release Squashing Plan')
+            );
+
+            if (botComment) {
+              console.log('🔄 Updating existing bot comment...');
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: summary
+              });
+              console.log('✅ Bot comment updated successfully');
+            } else {
+              console.log('📝 Creating new bot comment...');
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: summary
+              });
+              console.log('✅ Bot comment created successfully');
+            }
+
+      - name: Workflow Summary
+        if: steps.analyze_staging_commits.outputs.final_squash_summary != ''
+        run: |
+          echo ""
+          echo "================================================"
+          echo "🚀 STAGING TO MAIN RELEASE ANALYSIS COMPLETED"
+          echo "================================================"
+          echo ""
+          echo "✅ Analysis: Commits analyzed successfully"
+          echo "✅ Tagging: Release tag created and pushed"
+          echo "✅ Comment: PR comment posted with release plan"
+          echo ""
+          echo "📋 Next Steps:"
+          echo "  1. Review the PR comment for release details"
+          echo "  2. Approve and merge the PR when ready"
+          echo "  3. GitHub will automatically squash commits on merge"
+          echo "  4. Production deployment will trigger automatically"
+          echo ""
+          echo "🏷️ Release Tag: ${{ steps.analyze_staging_commits.outputs.release_tag }}"
+          echo "⏰ Timestamp: ${{ steps.analyze_staging_commits.outputs.timestamp }}"
+          echo ""
