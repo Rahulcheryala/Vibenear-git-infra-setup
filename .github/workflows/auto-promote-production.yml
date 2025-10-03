@@ -50,27 +50,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "🔍 Analyzing commits in staging branch that are not in main..."
+          set -euo pipefail
+          echo "🔍 Ensuring we have main..."
+          git fetch origin main:origin-main
 
-          # Check if there are new commits in staging that are not in main
-          NEW_COMMITS=$(git log main..staging --oneline --no-merges)
-
-          if [ -z "$NEW_COMMITS" ]; then
-            echo "✅ No new commits found in staging branch"
-            echo "📋 Staging and main branches are in sync"
+          echo "🔍 Checking for content differences (tree comparison)..."
+          if git diff --quiet origin-main..HEAD; then
+            echo "✅ Staging and main have identical content (after squash merge scenario)"
             echo "promotion_needed=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Check if there's already an open PR from staging to main
-          echo "🔍 Checking for existing PRs from staging to main..."
-          EXISTING_PR=$(gh pr list --base main --head staging --state open --json number --jq '.[0].number')
+          echo "📝 Collecting commits present in staging not in main (may include previously squashed ones if staging not reset)..."
+          NEW_COMMITS=$(git log origin-main..HEAD --oneline --no-merges)
 
-          if [ ! -z "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
-            echo "⚠️ PR #$EXISTING_PR already exists from staging to main"
+          # Check if there's already an open auto-promotion PR
+          echo "🔍 Checking for existing auto-promotion PRs..."
+          EXISTING_AUTO_PR=$(gh pr list --base main --head "auto/production-promotion-*" --state open --json number --jq '.[0].number')
+
+          if [ -n "$EXISTING_AUTO_PR" ] && [ "$EXISTING_AUTO_PR" != "null" ]; then
+            echo "⚠️ Auto-promotion PR #$EXISTING_AUTO_PR already exists"
             echo "promotion_needed=false" >> $GITHUB_OUTPUT
-            echo "existing_pr=$EXISTING_PR" >> $GITHUB_OUTPUT
+            echo "existing_pr=$EXISTING_AUTO_PR" >> $GITHUB_OUTPUT
             exit 0
+          fi
+
+          # Check for direct staging→main PR (informational only)
+          EXISTING_STAGING_PR=$(gh pr list --base main --head staging --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING_STAGING_PR" ] && [ "$EXISTING_STAGING_PR" != "null" ]; then
+            echo "Note: Direct staging→main PR #$EXISTING_STAGING_PR exists (will not block auto-promotion)"
           fi
 
           # Count commits and generate release info
@@ -86,6 +94,10 @@ jobs:
           echo "📝 Commits to be promoted to production:"
           echo "$NEW_COMMITS"
           echo ""
+
+          echo "promotion_needed=${{ steps.analyze.outputs.promotion_needed }}"
+          echo "existing_pr=${{ steps.analyze.outputs.existing_pr }}"
+          echo "commit_count=${{ steps.analyze.outputs.commit_count }}"
 
           # Set outputs
           echo "promotion_needed=true" >> $GITHUB_OUTPUT
@@ -105,7 +117,7 @@ jobs:
     name: Create Production PR
     runs-on: ubuntu-latest
     needs: commit-analysis
-    if: needs.commit-analysis.outputs.promotion_needed == 'true' && inputs.create_pr == true
+    if: needs.commit-analysis.outputs.promotion_needed == 'true' && inputs.create_pr
     outputs:
       pr_number: ${{ steps.create_pr.outputs.pr_number }}
 
@@ -116,6 +128,12 @@ jobs:
           ref: staging
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure full fetch
+        run: |
+          echo "🔄 Ensuring full fetch of all branches..."
+          git fetch --all --prune
+          echo "✅ Full fetch completed"
 
       - name: Create production promotion PR
         id: create_pr
@@ -178,6 +196,15 @@ jobs:
           reviewers: |
             rahulcheryala
             your-senior-dev
+
+      - name: Debug create-pr outputs
+        if: always()
+        run: |
+          echo "🔍 Debugging create-pr action outputs:"
+          echo "  • pull-request-number: ${{ steps.create_pr.outputs.pull-request-number }}"
+          echo "  • pull-request-url: ${{ steps.create_pr.outputs.pull-request-url }}"
+          echo "  • pull-request-operation: ${{ steps.create_pr.outputs.pull-request-operation }}"
+          echo "  • skipped: ${{ steps.create_pr.outputs.skipped }}"
 
       - name: Get PR number
         env:
