@@ -9,12 +9,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout develop branch
+      - name: Checkout develop and staging branches
         uses: actions/checkout@v4
         with:
           ref: develop
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch staging branch
+        run: git fetch origin staging:staging
 
       - name: Check if staging promotion is needed
         id: check_promotion

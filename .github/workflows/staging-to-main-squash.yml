@@ -11,12 +11,15 @@ jobs:
     if: github.base_ref == 'main' && github.head_ref == 'staging'
 
     steps:
-      - name: Checkout staging branch
+      - name: Checkout staging and main branches
         uses: actions/checkout@v4
         with:
           ref: staging
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch main branch
+        run: git fetch origin main:main
 
       - name: Analyze staging commits for final squash
         id: analyze_staging_commits
