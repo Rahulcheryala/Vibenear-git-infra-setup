@@ -14,6 +14,10 @@ on:
         default: ""
         type: string
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   # Job 1: Analyze Staging Commits
   commit-analysis:
@@ -43,6 +47,8 @@ jobs:
 
       - name: Analyze staging commits for production promotion
         id: analyze
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "🔍 Analyzing commits in staging branch that are not in main..."
 
@@ -58,7 +64,7 @@ jobs:
 
           # Check if there's already an open PR from staging to main
           echo "🔍 Checking for existing PRs from staging to main..."
-          EXISTING_PR=$(gh pr list --base main --head staging --state open --json number --jq '.[0].number')
+          EXISTING_PR=$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' --token $GITHUB_TOKEN)
 
           if [ ! -z "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
             echo "⚠️ PR #$EXISTING_PR already exists from staging to main"
@@ -88,9 +94,11 @@ jobs:
           echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
           echo "existing_pr=" >> $GITHUB_OUTPUT
 
-          echo "new_commits<<EOF" >> $GITHUB_OUTPUT
-          echo "$NEW_COMMITS" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "new_commits<<EOF"
+            echo "$NEW_COMMITS"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
   # Job 2: Create Production Promotion PR
   create-pr:
@@ -109,12 +117,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: auto/production-promotion-${{ github.run_number }}
           base: main
-          env:
-            RELEASE_TAG: ${{ steps.check_production_promotion.outputs.release_tag }}
-            TIMESTAMP: ${{ steps.check_production_promotion.outputs.timestamp }}
-            COMMIT_COUNT: ${{ steps.check_production_promotion.outputs.commit_count }}
-            NEW_COMMITS: ${{ steps.check_production_promotion.outputs.new_commits }}
-          title: "🚀 Production Release: $RELEASE_TAG"
+          title: "🚀 Production Release: ${{ needs.commit-analysis.outputs.release_tag }}"
           body: |
             ## 🚀 Production Deployment
 
@@ -123,40 +126,34 @@ jobs:
             ### 📋 Release Information:
 
             - **Release Tag**: `$RELEASE_TAG`
-            - **Timestamp**: $TIMESTAMP
-            - **Commit Count**: $COMMIT_COUNT commits
+            - **Timestamp**: ${{ needs.commit-analysis.outputs.timestamp }}
+            - **Commit Count**: ${{ needs.commit-analysis.outputs.commit_count }} commits
             - **Source**: `staging` branch
             - **Target**: `main` branch (production)
             - **Triggered By**: ${{ github.actor }} via manual workflow dispatch
 
             ### 📝 Commits to be Deployed:
-
             ```bash
-            $NEW_COMMITS
+            ${{ needs.commit-analysis.outputs.new_commits }}
             ```
 
-            ### 🔄 What Happens on Merge:
+            ### 📋 Release Notes:
+            ${{ needs.commit-analysis.outputs.release_notes }}
 
-            1. **GitHub Squash Merge**: All commits will be automatically squashed into a single release commit
-            2. **Release Tag**: Tag `$RELEASE_TAG` will be created
+            ### 🔄 What Happens on Merge:
+            1. **GitHub Squash Merge**: Squash merge into a single release commit
+            2. **Release Tag**: Tag `${{ needs.commit-analysis.outputs.release_tag }}` will be created (already pushed)
             3. **Production Deployment**: Automatic deployment to production environment
             4. **Clean History**: Production history will contain one commit per release
 
-            ### 📋 Release Notes:
-
-            $RELEASE_NOTES
 
             ### ⚠️ Important Notes:
-
             - This will deploy to **PRODUCTION** environment
-            - All changes will be squashed into a single commit for clean history
             - Rollback will be possible by reverting the single release commit
-            - Ensure all staging tests have passed before merging
-            - This PR requires **multiple approvals** before merging
+            - Ensure all staging validations are complete before merging
 
             ### 🔍 Pre-deployment Checklist:
-
-            - [ ] All staging tests have passed
+            - [ ] Manual QA testing completed
             - [ ] Code review completed
             - [ ] Database migrations tested
             - [ ] Release notes reviewed
@@ -165,7 +162,7 @@ jobs:
 
             **🔒 Production Deployment**: This PR requires **multiple approvals** before merging.
 
-            **👥 Auto-assigned Reviewers**: @rahulcheryala @your-senior-dev
+            **👥 Reviewers**: @rahulcheryala @your-senior-dev
           labels: |
             production
             deployment
@@ -198,18 +195,16 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create and push release tag
-        env:
-          RELEASE_TAG: ${{ needs.commit-analysis.outputs.release_tag }}
         run: |
           echo "🏷️ Creating release tag for production deployment..."
-          echo "📋 Release tag: $RELEASE_TAG"
+          echo "📋 Release tag: ${{ needs.commit-analysis.outputs.release_tag }}"
           echo ""
 
           # Create and push the release tag
-          git tag "$RELEASE_TAG"
-          git push origin "$RELEASE_TAG"
+          git tag "${{ needs.commit-analysis.outputs.release_tag }}"
+          git push origin "${{ needs.commit-analysis.outputs.release_tag }}"
 
-          echo "✅ Release tag created and pushed successfully: $RELEASE_TAG"
+          echo "✅ Release tag created and pushed successfully: ${{ needs.commit-analysis.outputs.release_tag }}"
           echo "📋 Tag will be used for production deployment tracking"
 
   # Job 4: Notification and Summary
@@ -237,13 +232,6 @@ jobs:
           echo "  • Commit Count: ${{ needs.commit-analysis.outputs.commit_count }}"
           echo "  • PR Number: ${{ needs.create-pr.outputs.pr_number }}"
           echo ""
-          echo "📋 Next Steps:"
-          echo "  1. Review the production promotion PR"
-          echo "  2. Complete code review and approvals"
-          echo "  3. Run final staging tests"
-          echo "  4. Merge PR to deploy to production"
-          echo "  5. Monitor production deployment"
-          echo ""
           echo "🔗 PR Link: https://github.com/${{ github.repository }}/pull/${{ needs.create-pr.outputs.pr_number }}"
-          echo "⚠️ Remember: This will deploy to PRODUCTION environment!"
+          echo "⚠️ Remember: Merging deploys to PRODUCTION."
           echo ""
