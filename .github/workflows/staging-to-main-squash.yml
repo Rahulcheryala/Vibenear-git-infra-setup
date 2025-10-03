@@ -37,7 +37,7 @@ jobs:
 
           # Generate release message with timestamp
           TIMESTAMP=$(date +'%d/%m/%Y %H:%M:%S UTC')
-          RELEASE_TAG="release-$(date +'%d%m%Y_%H%M%S')"
+          RELEASE_TAG="release-$(date +'%d-%m-%Y_%H.%M.%S')"
 
           echo "Commits to be squashed into single release commit:"
           echo "$COMMITS_TO_FINAL_SQUASH"
