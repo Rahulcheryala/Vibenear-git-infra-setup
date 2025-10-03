@@ -52,10 +52,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "🔍 Ensuring we have up-to-date main and tags..."
+          git fetch origin main:origin-main --tags
+
           echo "🔍 Checking for content differences (tree comparison)..."
           if git diff --quiet origin-main..HEAD; then
-            echo "✅ Staging and main have identical content (squash merge scenario handled)"
-            echo "promotion_needed=false" >> $GITHUB_OUTPUT
+            echo "✅ Staging and main have identical content (squash/rebase scenario handled)"
+            echo "promotion_needed=false" >> "$GITHUB_OUTPUT"
             echo "commit_count=0" >> "$GITHUB_OUTPUT"
             echo "release_tag=" >> "$GITHUB_OUTPUT"
             echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S UTC')" >> "$GITHUB_OUTPUT"
@@ -64,20 +67,30 @@ jobs:
             exit 0
           fi
 
-          echo "🔎 Locating latest release tag (release_*) to limit commit list..."
-          LAST_RELEASE_TAG="$(git tag --list 'release_*' --sort=-creatordate | head -n1 || true)"
+          echo "🔍 Using patch-id comparison to exclude changes already present on main..."
+          # git cherry marks commits by content: "+" = new (not in main), "-" = already in main
+          CHERRY_OUTPUT="$(git cherry -v origin-main HEAD || true)"
 
-          if [ -n "${LAST_RELEASE_TAG:-}" ]; then
-            echo "Using commits since ${LAST_RELEASE_TAG}"
-            NEW_COMMITS="$(git log "${LAST_RELEASE_TAG}..HEAD" --oneline --no-merges || true)"
-          else
-            echo "No prior release_* tag found. Using origin-main..HEAD."
-            NEW_COMMITS="$(git log origin-main..HEAD --oneline --no-merges || true)"
+          # Build a human-readable list: "<shortsha> <subject>" for "+" commits only
+          NEW_COMMITS="$(printf "%s\n" "$CHERRY_OUTPUT" \
+            | awk '$1=="+" { printf "%s ", substr($2,1,7); for (i=3;i<=NF;i++){ printf "%s%s", $i, (i<NF?" ":"") } print "" }')"
+
+          # Count "+" commits
+          COMMIT_COUNT="$(printf "%s\n" "$CHERRY_OUTPUT" | awk '$1=="+" { c++ } END { print c+0 }')"
+
+          if [ "$COMMIT_COUNT" -eq 0 ]; then
+            echo "✅ No new changes (by content) to promote"
+            echo "promotion_needed=false" >> "$GITHUB_OUTPUT"
+            echo "commit_count=0" >> "$GITHUB_OUTPUT"
+            echo "release_tag=" >> "$GITHUB_OUTPUT"
+            echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S UTC')" >> "$GITHUB_OUTPUT"
+            echo "existing_pr=" >> "$GITHUB_OUTPUT"
+            echo "new_commits=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           echo "🔍 Checking for existing auto-promotion PRs..."
-
-          # head wildcard isn't supported by gh directly; filter locally
+          # Filter for branches starting with auto/production-promotion-
           EXISTING_AUTO_PR="$(gh pr list --base main --state open --json number,headRefName \
             --jq '[.[] | select(.headRefName | startswith("auto/production-promotion-"))][0].number' || true)"
 
@@ -92,24 +105,16 @@ jobs:
             exit 0
           fi
 
-          # Check for direct staging→main PR (informational only)
-          EXISTING_STAGING_PR=$(gh pr list --base main --head staging --state open --json number --jq '.[0].number')
-          if [ -n "$EXISTING_STAGING_PR" ] && [ "$EXISTING_STAGING_PR" != "null" ]; then
-            echo "Note: Direct staging→main PR #$EXISTING_STAGING_PR exists (will not block auto-promotion)"
-          fi
-
-          # Count commits and generate release info
-          COMMIT_COUNT="$(printf "%s\n" "$NEW_COMMITS" | sed '/^$/d' | wc -l | tr -d ' ')"
-          TIMESTAMP=$(date +'%d/%m/%Y %H:%M:%S UTC')
+          TIMESTAMP="$(date +'%d/%m/%Y %H:%M:%S UTC')"
           RELEASE_TAG="release_$(date +'%d-%m-%Y_%H.%M.%S')"
 
           echo "📊 Analysis Results:"
-          echo "  • Commits to promote: $COMMIT_COUNT"
+          echo "  • Commits to promote (content not yet on main): $COMMIT_COUNT"
           echo "  • Release tag: $RELEASE_TAG"
           echo "  • Timestamp: $TIMESTAMP"
           echo ""
           echo "📝 Commits to be promoted to production:"
-          echo "$NEW_COMMITS"
+          printf "%s\n" "$NEW_COMMITS"
           echo ""
 
           # Set outputs
@@ -118,10 +123,9 @@ jobs:
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
           echo "existing_pr=" >> "$GITHUB_OUTPUT"
-
           {
-            echo "new_commits<<EOF"
-            echo "$NEW_COMMITS"
+            echo "new_commits<<'EOF'"
+            printf "%s\n" "$NEW_COMMITS"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
