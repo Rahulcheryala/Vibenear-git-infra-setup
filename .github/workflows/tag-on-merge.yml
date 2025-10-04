@@ -1,0 +1,64 @@
+name: Tag Production Release on Merge
+run-name: Tag on merge by @${{ github.actor }}
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  tag-release:
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'staging'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine tag name from PR
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          PR="${{ github.event.pull_request.number }}"
+          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+
+          echo "🔎 Reading PR title/body for existing Release Tag..."
+          TEXT="$(gh api "repos/${REPO}/pulls/${PR}" --jq '[.title,.body] | join("\n")')"
+          TAG=$(printf "%s" "$TEXT" | sed -nE 's/.*Release Tag[^`]*`([^`]+)`.*/\1/p' | head -n1 || true)
+
+          if [ -z "${TAG:-}" ]; then
+            TAG="release_$(date -u +'%d-%m-%Y_%H.%M.%S')"
+            echo "ℹ️ No tag found in PR; generating new: $TAG"
+          else
+            echo "🔁 Reusing tag from PR: $TAG"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update tag ref to merge commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          TAG="${{ steps.tag.outputs.tag }}"
+          SHA="${{ steps.tag.outputs.sha }}"
+
+          echo "🏷️ Upserting tag $TAG -> $SHA"
+          # Try GET; if not found, create; else update with force
+          if gh api "repos/${REPO}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "🔁 Tag exists; updating to merge commit"
+            gh api -X PATCH "repos/${REPO}/git/refs/tags/${TAG}" -f sha="$SHA" -f force=true >/dev/null
+          else
+            echo "🆕 Creating tag"
+            gh api -X POST "repos/${REPO}/git/refs" -f ref="refs/tags/${TAG}" -f sha="$SHA" >/dev/null
+          fi
+
+          echo "✅ Tag ready: ${TAG} -> ${SHA}"
