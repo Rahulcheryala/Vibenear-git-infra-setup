@@ -57,8 +57,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Ensure we have an up-to-date main ref and tags
+          echo "🔍 Ensuring we have up-to-date main and tags..."
           git fetch origin main:origin-main --tags
+
+          echo "🔍 Checking for content differences (tree comparison)..."
+          if git diff --quiet origin-main..HEAD; then
+            echo "✅ Staging and main have identical content"
+            echo "promotion_needed=false" >> "$GITHUB_OUTPUT"
+            echo "commit_count=0" >> "$GITHUB_OUTPUT"
+            echo "release_tag=" >> "$GITHUB_OUTPUT"
+            echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S UTC')" >> "$GITHUB_OUTPUT"
+            echo "existing_pr=" >> "$GITHUB_OUTPUT"
+            echo "new_commits=" >> "$GITHUB_OUTPUT"
+            echo "shas_to_pick=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           echo "🔎 Finding last release tag (release_*)..."
           LAST_RELEASE_TAG="$(git tag --list 'release_*' --sort=-creatordate | head -n1 || true)"
@@ -70,70 +83,57 @@ jobs:
             LOG_RANGE="origin-main..HEAD"
           fi
 
-          echo "📝 Collecting candidate commits (no merges, oldest first)..."
-          # Format: "<sha>\t<subject>"
-          COMMITS_RAW="$(git log "$LOG_RANGE" --no-merges --reverse --format='%H%x09%s' || true)"
+          # Human-readable commit list for PR body
+          NEW_COMMITS="$(git log "$LOG_RANGE" --oneline --no-merges || true)"
+          # SHAs to cherry-pick (oldest first) for a clean PR branch off main
+          SHAS_TO_PICK="$(git log "$LOG_RANGE" --no-merges --reverse --format=%H || true)"
 
-          NEW_COMMITS_FILTERED=""
-          SHAS_FILTERED=""
+          # Count human-readable commits
+          COMMIT_COUNT="$(printf "%s\n" "$NEW_COMMITS" | sed '/^$/d' | wc -l | tr -d ' ')"
 
-          echo "🧹 Filtering out commits that already exist on main (e.g., prior squash-merge commit)..."
-          while IFS=$'\t' read -r sha subject; do
-            # Skip empty lines (when there are no commits)
-            [ -z "${sha:-}" ] && continue
-
-            # If the commit is already contained in main's history, skip it.
-            if git merge-base --is-ancestor "$sha" origin-main; then
-              # This covers the previous release's squash commit and any other commits imported from main
-              continue
-            fi
-
-            # Keep this commit
-            NEW_COMMITS_FILTERED+=$(printf "%s %s\n" "${sha:0:7}" "$subject")
-            SHAS_FILTERED+=$(printf "%s\n" "$sha")
-          done <<< "$COMMITS_RAW"
-
-          COMMIT_COUNT="$(printf "%s\n" "$NEW_COMMITS_FILTERED" | sed '/^$/d' | wc -l | tr -d ' ')"
-
-          if [ "${COMMIT_COUNT}" -eq 0 ]; then
-            echo "✅ No new commits to promote after filtering."
+          if [ "$COMMIT_COUNT" -eq 0 ]; then
+            echo "✅ No new commits to promote in selected range"
             echo "promotion_needed=false" >> "$GITHUB_OUTPUT"
             echo "commit_count=0" >> "$GITHUB_OUTPUT"
             echo "release_tag=" >> "$GITHUB_OUTPUT"
             echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S UTC')" >> "$GITHUB_OUTPUT"
             echo "existing_pr=" >> "$GITHUB_OUTPUT"
             echo "new_commits=" >> "$GITHUB_OUTPUT"
-            echo "shas_to_pick=" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          echo "🔍 Checking for existing staging→main PR..."
+          EXISTING_STAGING_PR="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' || true)"
+
+          if [ -n "${EXISTING_STAGING_PR:-}" ] && [ "${EXISTING_STAGING_PR}" != "null" ]; then
+            echo "ℹ️ Staging→main PR #${EXISTING_STAGING_PR} already exists - will reuse it"
+            echo "promotion_needed=true" >> "$GITHUB_OUTPUT"
+            echo "existing_pr=${EXISTING_STAGING_PR}" >> "$GITHUB_OUTPUT"
+          else
+            echo "promotion_needed=true" >> "$GITHUB_OUTPUT"
+            echo "existing_pr=" >> "$GITHUB_OUTPUT"
           fi
 
           TIMESTAMP="$(date +'%d/%m/%Y %H:%M:%S UTC')"
           RELEASE_TAG="release_$(date +'%d-%m-%Y_%H.%M.%S')"
 
-          echo "📊 Analysis Results (after filtering):"
-          echo "  • Commits to promote: $COMMIT_COUNT"
+          echo "📊 Analysis Results:"
+          echo "  • Commits to promote (content not yet on main): $COMMIT_COUNT"
           echo "  • Release tag: $RELEASE_TAG"
           echo "  • Timestamp: $TIMESTAMP"
           echo ""
-          echo "📝 Commits:"
-          printf "%s\n" "$NEW_COMMITS_FILTERED"
+          echo "📝 Commits to be promoted to production:"
+          printf "%s\n" "$NEW_COMMITS"
           echo ""
 
-          # Outputs
+          # Set outputs (preserve existing_pr value from above)
           echo "promotion_needed=true" >> "$GITHUB_OUTPUT"
           echo "commit_count=$COMMIT_COUNT" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
-
           {
-            echo "new_commits<<'EOF'"
-            printf "%s\n" "$NEW_COMMITS_FILTERED"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-          {
-            echo "shas_to_pick<<'EOF'"
-            printf "%s\n" "$SHAS_FILTERED"
+            echo "new_commits<<EOF"
+            printf "%s\n" "$NEW_COMMITS"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
