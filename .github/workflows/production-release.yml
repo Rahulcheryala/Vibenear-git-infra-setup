@@ -15,11 +15,6 @@ on:
         default: ""
         type: string
 
-description: |
-  Manually triggered workflow to create or update a Pull Request from `staging` to `main`
-  for production deployment. Commits are calculated against the latest release tag that exists on main.
-  The actual release tag is pushed only after the PR is squash-merged to main by a separate workflow.
-
 permissions:
   contents: write
   pull-requests: write
