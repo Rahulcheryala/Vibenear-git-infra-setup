@@ -44,7 +44,7 @@ jobs:
           echo "promotion_needed=true" >> $GITHUB_OUTPUT
 
           # Get feature branches from commit messages
-          FEATURES=$(echo "$NEW_COMMITS" | grep -oE "(feature|hotfix)/[a-zA-Z0-9\-]*" | sort | uniq)
+          FEATURES=$(echo "$NEW_COMMITS" | grep -oE "(feature|bugfix|hotfix)/[a-zA-Z0-9\-]*" | sort | uniq)
 
           echo "features<<EOF" >> $GITHUB_OUTPUT
           echo "$FEATURES" >> $GITHUB_OUTPUT
