@@ -145,7 +145,7 @@ jobs:
           EXISTING_TAG=""
           if [ -n "${EXISTING_PR:-}" ] && [ "${EXISTING_PR}" != "null" ]; then
             echo "ℹ️ Open PR detected: #$EXISTING_PR"
-            PR_TEXT="$(gh pr view "$EXISTING_PR" --json title,body --jq '[.title,.body]|join(\"\n\")' || true)"
+            PR_TEXT="$(gh pr view "$EXISTING_PR" --json title,body --jq '[.title,.body]|join("\n")' || true)"
             # Extract existing Release Tag value if present
             EXISTING_TAG="$(printf "%s" "$PR_TEXT" | sed -nE 's/.*Release Tag[^`]*`([^`]+)`.*/\1/p' | head -n1 || true)"
           fi
@@ -162,7 +162,7 @@ jobs:
           NEW_COMMITS=""
           for sha in "${SHAS_IN_RANGE[@]}"; do
             subj="$(git log -n1 --format=%s "$sha")"
-            NEW_COMMITS+=$(printf "%s %s\n" "${sha:0:7}" "$subj")
+            NEW_COMMITS+="${sha:0:7} ${subj}"$'\n'
           done
           COMMIT_COUNT="${#SHAS_IN_RANGE[@]}"
 
