@@ -159,7 +159,7 @@ jobs:
           NEW_COMMITS=""
           for sha in "${FILTERED_SHAS[@]}"; do
             subj="$(git log -n1 --format=%s "$sha")"
-            NEW_COMMITS+=$(printf "%s %s\n" "${sha:0:7}" "$subj")
+            NEW_COMMITS+="${sha:0:7} ${subj}"$'\n'
           done
 
           COMMIT_COUNT="${#FILTERED_SHAS[@]}"
