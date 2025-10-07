@@ -33,7 +33,7 @@ jobs:
           fi
 
           # Extract feature branch names from commit messages
-          FEATURE_BRANCHES=$(echo "$COMMITS_TO_SQUASH" | grep -oE "(feature|hotfix)/[a-zA-Z0-9\-]*" | sort | uniq)
+          FEATURE_BRANCHES=$(echo "$COMMITS_TO_SQUASH" | grep -oE "(feature|bugfix|hotfix)/[a-zA-Z0-9\-]*" | sort | uniq)
 
           echo "Commits to squash:"
           echo "$COMMITS_TO_SQUASH"

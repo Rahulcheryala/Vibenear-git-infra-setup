@@ -14,18 +14,19 @@ jobs:
           branch_name="${{ github.head_ref }}"
           echo "Checking branch name: $branch_name"
 
-          if [[ $branch_name =~ ^(feature|hotfix)/[a-z0-9\-]+$ ]]; then
+          if [[ $branch_name =~ ^(feature|bugfix|hotfix)/[a-z0-9\-]+$ ]]; then
             echo "Branch name follows the naming convention: <type>/<branch-name>"
             echo "Branch name is valid: $branch_name"
           else
             echo "Branch name does not follow the naming convention!"
             echo ""
             echo "BRANCH NAMING REQUIREMENTS:"
-            echo "  • Must start with 'feature/', or 'hotfix/'"
+            echo "  • Must start with 'feature/', 'bugfix/', or 'hotfix/'"
             echo "  • Must contain only lowercase letters, numbers, and hyphens"
             echo "  • Examples:"
             echo "    - feature/user-authentication"
-            echo "    - hotfix/security-patch"
+            echo "    - bugfix/performance-optimization"
+            echo "    - hotfix/critical-fix"
             echo ""
             echo "TO FIX YOUR BRANCH NAME:"
             echo "  1. Rename your current branch:"
