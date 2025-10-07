@@ -79,10 +79,14 @@ jobs:
 
           if [ -n "${LAST_MERGED_PR:-}" ] && [ "${LAST_MERGED_PR}" != "null" ]; then
             echo "ℹ️ Last merged PR detected: #${LAST_MERGED_PR}"
-            # Get the last commit OID from that PR
-            LAST_PR_COMMIT="$(gh pr view "${LAST_MERGED_PR}" --json commits --jq '.commits.nodes[-1].oid' || true)"
-            echo "ℹ️ Last merged PR commit: ${LAST_PR_COMMIT}"ß
-            if [ -n "${LAST_PR_COMMIT:-}" ] && git merge-base --is-ancestor "${LAST_PR_COMMIT}" HEAD; then
+            # Get the last commit OID from that PR.
+            # Handle multiple possible shapes that gh might return for commits:
+            # - commits.nodes[].commit.oid (GraphQL connection)
+            # - commits.nodes[].oid
+            # - commits[].oid (flattened array)
+            LAST_PR_COMMIT="$(gh pr view "${LAST_MERGED_PR}" --json commits --jq '.commits.nodes[-1].commit.oid // .commits.nodes[-1].oid // .commits[-1].oid' 2>/dev/null || true)"
+            echo "ℹ️ Last merged PR commit: ${LAST_PR_COMMIT}"
+            if [ -n "${LAST_PR_COMMIT:-}" ] && git cat-file -e "${LAST_PR_COMMIT}^{commit}" 2>/dev/null && git merge-base --is-ancestor "${LAST_PR_COMMIT}" HEAD; then
               BASELINE_REF="${LAST_PR_COMMIT}"
               BASELINE_SOURCE="last_merged_pr_commit"
               echo "✅ Using PR #${LAST_MERGED_PR} last commit as baseline: ${BASELINE_REF}"
