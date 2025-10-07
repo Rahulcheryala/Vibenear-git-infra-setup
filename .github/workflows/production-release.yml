@@ -75,28 +75,54 @@ jobs:
             exit 0
           fi
 
-          echo "🔎 Find last release_* tag that is reachable from main only..."
-          LAST_MAIN_TAG=""
-          for t in $(git tag --list 'release_*' --sort=-creatordate); do
-            if git merge-base --is-ancestor "$(git rev-parse "$t^{commit}")" origin-main; then
-              LAST_MAIN_TAG="$t"
+          echo "🔎 Find the last point where main was merged back into staging..."
+          # Look for merge commits in staging where main was brought in
+          # These commits mark synchronization points after a promotion
+          LAST_SYNC_SHA=""
+          for commit in $(git log HEAD --merges --format=%H | head -50); do
+            # Check if commit message indicates main was merged into staging
+            msg=$(git log -1 --format=%s "$commit")
+            if echo "$msg" | grep -qi "merge.*main"; then
+              LAST_SYNC_SHA="$commit"
+              echo "ℹ️ Found last main→staging sync at: ${commit:0:9}"
+              echo "   Commit: $msg"
               break
             fi
           done
 
-          if [ -n "$LAST_MAIN_TAG" ]; then
-            LOG_RANGE="${LAST_MAIN_TAG}..HEAD"
-            echo "ℹ️ Using range since main's last release tag: $LAST_MAIN_TAG"
-          else
-            LOG_RANGE="origin-main..HEAD"
-            echo "ℹ️ No main release tag found; using $LOG_RANGE"
+          # If no explicit merge found, use git merge-base as fallback
+          if [ -z "$LAST_SYNC_SHA" ]; then
+            echo "🔎 No main→staging merge commit found"
+            echo "   Trying merge-base between staging and main..."
+            if LAST_SYNC_SHA=$(git merge-base origin-main HEAD 2>/dev/null); then
+              echo "ℹ️ Using merge-base as starting point: ${LAST_SYNC_SHA:0:9}"
+            else
+              echo "⚠️  No common ancestor found between staging and main"
+              echo "   This may happen if main was rewritten or is a shallow clone"
+              echo "   Using all commits in staging as potentially new"
+              LAST_SYNC_SHA=""
+            fi
           fi
 
-          echo "📝 Collect SHAs in range (no merges, oldest first)..."
-          # SHAs in range
-          mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse "$LOG_RANGE" || true)
+          # Determine the range to analyze
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            LOG_RANGE="${LAST_SYNC_SHA}..HEAD"
+          else
+            # No sync point found - analyze all commits in staging
+            LOG_RANGE="HEAD"
+          fi
+
+          echo "📝 Analyzing commits in range: $LOG_RANGE"
+
+          # Get all commits to analyze
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse "$LOG_RANGE" || true)
+          else
+            mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse HEAD || true)
+          fi
+          
           if [ "${#SHAS_IN_RANGE[@]}" -eq 0 ]; then
-            echo "ℹ️ No candidate commits in range"
+            echo "ℹ️ No commits found since last sync with main"
             {
               echo "promotion_needed=false"
               echo "commit_count=0"
@@ -108,28 +134,31 @@ jobs:
             exit 0
           fi
 
-          echo "🔍 Filter by content not on main (patch-id) using git cherry..."
-          # git cherry marks commits by content: "+" = new (not in main), "-" = already in main
+          echo "🔍 Verifying commits are truly new (not already in main)..."
+          # Use git cherry to double-check content isn't already in main
+          # This handles edge cases like cherry-picks or content duplication
           mapfile -t CHERRY_PLUS < <(git cherry -v origin-main HEAD | awk '$1=="+"{print $2}' || true)
 
-          # Intersect range with cherry '+'
+          # Intersect: only keep commits that are in range AND marked new by cherry
           TMP_RANGE=/tmp/shas_in_range.txt
+          TMP_CHERRY=/tmp/cherry_plus.txt
           printf "%s\n" "${SHAS_IN_RANGE[@]}" > "$TMP_RANGE"
+          printf "%s\n" "${CHERRY_PLUS[@]}" > "$TMP_CHERRY"
 
           FILTERED_SHAS=()
-          for sha in "${CHERRY_PLUS[@]}"; do
-            if grep -Fxq "$sha" "$TMP_RANGE"; then
+          for sha in "${SHAS_IN_RANGE[@]}"; do
+            if grep -Fxq "$sha" "$TMP_CHERRY"; then
               FILTERED_SHAS+=("$sha")
             fi
           done
 
           echo "🧪 Diagnostics:"
-          echo "  • Candidates in range: ${#SHAS_IN_RANGE[@]}"
-          echo "  • Content-new vs main (cherry '+'): ${#CHERRY_PLUS[@]}"
-          echo "  • Intersection (to promote): ${#FILTERED_SHAS[@]}"
+          echo "  • Commits since last main→staging sync: ${#SHAS_IN_RANGE[@]}"
+          echo "  • Commits marked new by git cherry: ${#CHERRY_PLUS[@]}"
+          echo "  • Final commits to promote: ${#FILTERED_SHAS[@]}"
 
           if [ "${#FILTERED_SHAS[@]}" -eq 0 ]; then
-            echo "✅ No new commits to promote after filtering."
+            echo "✅ No new content to promote (all changes already in main)"
             {
               echo "promotion_needed=false"
               echo "commit_count=0"
