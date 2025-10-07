@@ -271,5 +271,6 @@ For emergency fixes, **always start from develop** and fast-track through the no
 
 **🔗 Related Documentation**:
 
+- **[ONE_WAY_FLOW.md](./ONE_WAY_FLOW.md)**: Essential reading on why back-merging breaks git history
 - [GitHub Branch Protection Rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests/about-protected-branches)
 - [GitHub CODEOWNERS](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)

@@ -302,3 +302,11 @@ git push -u origin hotfix/urgent-fix
 ---
 
 **🎉 Congratulations!** You now have a complete industry-grade Git infrastructure setup. Follow the implementation checklist to configure GitHub settings and test the workflow.
+
+---
+
+## 📚 Additional Resources
+
+- **[ONE_WAY_FLOW.md](./ONE_WAY_FLOW.md)**: Detailed explanation of why backwards merging is forbidden and causes history corruption
+- **[GIT_SETUP_GUIDE.md](./GIT_SETUP_GUIDE.md)**: Complete developer workflow guide
+- **[BRANCH_PROTECTION_SETUP.md](./BRANCH_PROTECTION_SETUP.md)**: Security and protection rules

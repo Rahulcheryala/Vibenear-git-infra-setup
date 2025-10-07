@@ -247,4 +247,6 @@ For issues with this setup:
 3. Ensure all required environment variables are set
 4. Review the troubleshooting section above
 
+**Important**: Read [ONE_WAY_FLOW.md](./ONE_WAY_FLOW.md) to understand why backwards merging is forbidden and how to handle hotfixes correctly.
+
 This setup ensures code quality, maintains clean history, and provides safe deployment practices across all environments.
