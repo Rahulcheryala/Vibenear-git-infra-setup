@@ -81,6 +81,7 @@ jobs:
             echo "ℹ️ Last merged PR detected: #${LAST_MERGED_PR}"
             # Get the last commit OID from that PR
             LAST_PR_COMMIT="$(gh pr view "${LAST_MERGED_PR}" --json commits --jq '.commits.nodes[-1].oid' || true)"
+            echo "ℹ️ Last merged PR commit: ${LAST_PR_COMMIT}"ß
             if [ -n "${LAST_PR_COMMIT:-}" ] && git merge-base --is-ancestor "${LAST_PR_COMMIT}" HEAD; then
               BASELINE_REF="${LAST_PR_COMMIT}"
               BASELINE_SOURCE="last_merged_pr_commit"
