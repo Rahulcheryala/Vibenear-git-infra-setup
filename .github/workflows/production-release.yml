@@ -141,7 +141,7 @@ jobs:
           EXISTING_TAG=""
           if [ -n "${EXISTING_PR:-}" ] && [ "${EXISTING_PR}" != "null" ]; then
             echo "ℹ️ Open PR detected: #$EXISTING_PR"
-            PR_TEXT="$(gh pr view "$EXISTING_PR" --json title,body --jq '[.title,.body]|join(\"\\n\")' || true)"
+            PR_TEXT="$(gh pr view "$EXISTING_PR" --json title,body --jq '[.title,.body]|join("\n")' || true)"
             # Extract backticked Release Tag value if present
             EXISTING_TAG="$(printf "%s" "$PR_TEXT" | sed -nE 's/.*Release Tag[^`]*`([^`]+)`.*/\1/p' | head -n1 || true)"
           fi
