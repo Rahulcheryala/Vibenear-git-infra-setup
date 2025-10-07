@@ -4,6 +4,8 @@
 
 This guide provides a comprehensive implementation plan for your industry-grade Git infrastructure with proper branching strategy, approval processes, and automated deployments.
 
+**Important:** This repository uses a **squash merge workflow** for production deployments. See `SQUASH_MERGE_WORKFLOW.md` for detailed information about how commit analysis works and best practices for maintaining sync between staging and main branches.
+
 ## 📋 Implementation Checklist
 
 ### Phase 1: Initial Setup ✅
@@ -182,6 +184,23 @@ The `test-git-workflow.sh` script provides:
 2. Creates PR from `staging` to `main`
 3. `staging-to-main-squash.yml` analyzes and comments on PR
 4. After review and merge, `production-deploy.yml` deploys to production
+5. **Critical:** Merge `main` back into `staging` to mark synchronization point
+
+### Post-Production Sync (Required)
+
+After each production deployment, you **must** sync `main` back into `staging`:
+
+```bash
+git checkout staging
+git pull origin staging
+git merge main -m "Sync: Merge main into staging after production release"
+git push origin staging
+```
+
+**Why this is required:**
+- Marks the synchronization point for commit analysis
+- Prevents already-merged commits from appearing in future promotions
+- See `SQUASH_MERGE_WORKFLOW.md` for detailed explanation
 
 ## 🔧 Customization Options
 

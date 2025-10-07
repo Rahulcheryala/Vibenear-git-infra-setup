@@ -17,7 +17,18 @@ on:
 
 description: |
   Manually triggered workflow to create or update a Pull Request from `staging` to `main`
-  for production deployment. Commits are calculated against the latest release tag that exists on main.
+  for production deployment.
+  
+  **How Commit Analysis Works:**
+  - Finds the last point where `main` was merged back into `staging` (synchronization point)
+  - Analyzes commits added to `staging` after that sync point
+  - Filters commits to ensure content isn't already in `main` (handles squash merges correctly)
+  - Tags are used for release identification, not for commit range calculation
+  
+  **Important:** After merging a staging→main PR, always merge `main` back into `staging` to 
+  mark the synchronization point. This prevents already-merged commits from appearing in future 
+  promotion analyses.
+  
   The actual release tag is pushed only after the PR is squash-merged to main by a separate workflow.
 
 permissions:
