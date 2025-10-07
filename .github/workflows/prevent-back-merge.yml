@@ -1,0 +1,158 @@
+name: Prevent Back-Merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  validate-pr-direction:
+    name: Validate PR Direction
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check PR direction
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const base = context.payload.pull_request.base.ref;
+            const head = context.payload.pull_request.head.ref;
+            
+            console.log(`🔍 Checking PR direction: ${head} → ${base}`);
+            
+            // Define invalid back-merge patterns
+            const invalidMerges = [
+              { from: 'main', to: 'staging', reason: 'Main should never be merged back to staging' },
+              { from: 'main', to: 'develop', reason: 'Main should never be merged back to develop' },
+              { from: 'staging', to: 'develop', reason: 'Staging should never be merged back to develop' }
+            ];
+            
+            // Check if this is a back-merge
+            for (const invalid of invalidMerges) {
+              if (head === invalid.from && base === invalid.to) {
+                const errorMessage = `
+            ❌ **INVALID PR DIRECTION DETECTED**
+            
+            **From:** \`${head}\`  
+            **To:** \`${base}\`
+            
+            ## 🚫 Why This Is Blocked
+            
+            ${invalid.reason}
+            
+            ## ✅ Correct Workflow Direction
+            
+            This repository uses a **one-way promotion flow**:
+            
+            \`\`\`
+            feature/branch → develop → staging → main
+            \`\`\`
+            
+            **Never merge backwards** because:
+            - Commits are squashed at different stages
+            - Back-merging would rewrite git history
+            - It would create merge conflicts on every commit
+            - You would lose the detailed feature branch history
+            
+            ## 🔧 What You Should Do Instead
+            
+            ### For Bug Fixes or New Features:
+            1. Create a branch from \`develop\`:
+               \`\`\`bash
+               git checkout develop
+               git pull origin develop
+               git checkout -b feature/your-fix
+               \`\`\`
+            
+            2. Follow the normal promotion flow:
+               - feature → develop (via PR with squash merge)
+               - develop → staging (auto-created PR)
+               - staging → main (manual trigger)
+            
+            ### For Hotfixes:
+            - Always branch from \`develop\` (NOT from main)
+            - Use \`hotfix/\` prefix for urgent fixes
+            - Fast-track through normal flow with expedited reviews
+            
+            ## 📚 Documentation
+            
+            - [Git Setup Guide](../blob/main/GIT_SETUP_GUIDE.md)
+            - [Workflow Implementation Guide](../blob/main/WORKFLOW_IMPLEMENTATION_GUIDE.md)
+            - [Branch Protection Setup](../blob/main/BRANCH_PROTECTION_SETUP.md)
+            
+            ---
+            
+            **This PR has been blocked to protect repository history.**
+            Please close this PR and follow the correct workflow.
+                `;
+                
+                // Post comment on PR
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: errorMessage
+                });
+                
+                // Fail the check
+                core.setFailed(`❌ Invalid PR direction: ${head} → ${base}. ${invalid.reason}`);
+                return;
+              }
+            }
+            
+            // Check if trying to merge non-standard branches to protected branches
+            const protectedBranches = ['main', 'staging', 'develop'];
+            
+            if (base === 'main' && head !== 'staging') {
+              const warningMessage = `
+            ⚠️ **UNUSUAL PR DIRECTION**
+            
+            **From:** \`${head}\`  
+            **To:** \`${base}\`
+            
+            ## Expected Flow
+            
+            Typically, only \`staging\` should be merged to \`main\`.
+            
+            If this is intentional (e.g., emergency hotfix that bypassed staging), please:
+            1. Document the reason in the PR description
+            2. Get additional approval from a senior team member
+            3. Ensure the same changes are synchronized to staging and develop
+            
+            If this is not intentional, close this PR and follow the standard workflow.
+              `;
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: warningMessage
+              });
+              
+              console.log('⚠️ Warning posted about unusual PR direction');
+            }
+            
+            if (base === 'staging' && head !== 'develop') {
+              const warningMessage = `
+            ⚠️ **UNUSUAL PR DIRECTION**
+            
+            **From:** \`${head}\`  
+            **To:** \`${base}\`
+            
+            ## Expected Flow
+            
+            Typically, only \`develop\` should be merged to \`staging\`.
+            
+            If this is a special case, please document the reason clearly.
+              `;
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: warningMessage
+              });
+              
+              console.log('⚠️ Warning posted about unusual PR direction');
+            }
+            
+            console.log('✅ PR direction validation passed');

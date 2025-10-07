@@ -100,6 +100,19 @@ feature/branch → develop → staging → main
    PR Review    Auto PR    Auto PR   Release
 ```
 
+⚠️ **IMPORTANT: This is a ONE-WAY flow only!**
+
+**NEVER merge backwards:**
+- ❌ main → staging (rewrites staging history)
+- ❌ staging → develop (rewrites develop history)  
+- ❌ main → develop (rewrites develop history)
+
+The workflow uses commit squashing at different stages, which rewrites history. Merging backwards would:
+1. Create merge conflicts
+2. Lose detailed feature branch history
+3. Duplicate commits with different SHAs
+4. Break the clean release history in production
+
 ### Commit Squashing Strategy
 
 1. **Feature → Develop**: Keep individual commits for detailed history
@@ -215,6 +228,43 @@ Modify branch protection rules to change approval requirements:
 - Develop: 1 approval (development velocity)
 
 ## 🚨 Important Notes
+
+### One-Way Promotion Flow
+
+**Critical Rule**: This workflow is designed as a **strictly one-way promotion flow**. 
+
+❌ **NEVER do these operations:**
+- Merge main back to staging
+- Merge staging back to develop
+- Cherry-pick from main to staging/develop (use the proper flow instead)
+
+**Why?** The workflow uses different commit squashing strategies at each level:
+- Feature → Develop: Individual commits preserved
+- Develop → Staging: Commits may be squashed by feature
+- Staging → Main: All commits squashed into single release
+
+Merging backwards would attempt to merge squashed commits back into branches with unsquashed history, causing:
+- Git history corruption
+- Merge conflicts on every commit
+- Loss of detailed feature branch history
+- Duplicate commits with different SHAs
+
+### Handling Hotfixes
+
+For emergency production fixes, **always start from develop** and follow the normal flow:
+
+```bash
+# Create hotfix from develop (NOT from main)
+git checkout develop
+git checkout -b hotfix/urgent-fix
+
+# Make changes and push
+git commit -m "Fix urgent issue"
+git push -u origin hotfix/urgent-fix
+
+# Follow normal promotion: develop → staging → main
+# Expedite reviews if needed, but maintain the flow
+```
 
 ### Security Considerations
 

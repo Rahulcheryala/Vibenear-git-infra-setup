@@ -150,6 +150,15 @@ Environment-specific configurations are stored in `.github/environments/`:
 - **Develop → Staging**: ❌ **Regular merge** (preserve testing context)
 - **Staging → Main**: ❌ **Regular merge** (maintain release traceability)
 
+⚠️ **CRITICAL: One-Way Flow Only**
+
+This is a **strictly one-way promotion flow**. NEVER merge backwards:
+- ❌ **NEVER merge main → staging** (will rewrite staging history)
+- ❌ **NEVER merge staging → develop** (will rewrite develop history)
+- ❌ **NEVER merge main → develop** (will rewrite develop history)
+
+**Why?** When commits are squashed during promotion to staging or main, the commit history is rewritten. Merging back would create conflicts and lose the detailed history of feature branches that staging and develop preserve.
+
 ### Branch Naming Convention
 All feature branches must follow the pattern: `feature/descriptive-name`
 
@@ -186,6 +195,35 @@ When promoting between branches:
 1. Ensure your local branch is up to date
 2. Resolve conflicts locally before pushing
 3. Test thoroughly after conflict resolution
+
+⚠️ **Important**: Only promote forward (develop → staging → main). Never merge backwards to avoid history corruption.
+
+### Hotfixes and Emergency Fixes
+
+If you need to deploy an urgent fix to production:
+
+1. **Create hotfix branch from develop** (NOT from main):
+   ```bash
+   git checkout develop
+   git pull origin develop
+   git checkout -b hotfix/critical-bug-fix
+   ```
+
+2. **Make the fix and push**:
+   ```bash
+   git add .
+   git commit -m "Fix critical bug"
+   git push -u origin hotfix/critical-bug-fix
+   ```
+
+3. **Follow the normal promotion flow**:
+   - Create PR to develop (squash merge)
+   - Auto-promotion to staging
+   - Manual promotion to main
+
+4. **For true emergencies**, you can expedite reviews and approvals, but always maintain the one-way flow.
+
+**Why not branch from main?** Because main has squashed commits. Starting from main would create divergent histories and merge conflicts when trying to integrate back to develop/staging.
 
 ## Scripts Reference
 

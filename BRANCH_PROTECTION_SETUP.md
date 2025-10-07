@@ -177,7 +177,33 @@ In Repository Settings → General → Pull Requests:
 - ✅ **Allow rebase merging**: `Yes`
 - ✅ **Automatically delete head branches**: `Yes`
 
-### 3. Set Up Required Status Checks
+### 3. Restrict Base Branches for PRs (Prevent Back-Merging)
+
+⚠️ **CRITICAL**: To prevent accidental back-merging (e.g., main → staging), configure allowed PR base branches:
+
+**For Main Branch Protection:**
+- Only allow PRs from `staging` branch
+- This prevents accidentally merging main back to lower environments
+
+**For Staging Branch Protection:**
+- Only allow PRs from `develop` branch
+- This prevents merging main or other branches to staging
+
+**For Develop Branch Protection:**
+- Only allow PRs from `feature/*`, `hotfix/*`, and `bugfix/*` branches
+- This prevents merging staging or main back to develop
+
+**How to Configure:**
+1. In GitHub Settings → Branches → Branch protection rules
+2. Under "Restrict who can push to matching branches"
+3. Or use CODEOWNERS to enforce that only automation can create PRs between main branches
+
+**Note**: GitHub doesn't have a native "restrict PR source branches" feature, but you can:
+- Use a GitHub Action to validate PR source/target branches
+- Add this to your PR validation workflows
+- Train team members on the one-way flow rule
+
+### 4. Set Up Required Status Checks
 
 Make sure your workflows are properly configured as required status checks:
 
@@ -208,6 +234,33 @@ After setting up protection rules, test them by:
    - Verify it cannot be merged until checks pass
 
 ## ⚠️ Important Notes
+
+### One-Way Flow Protection
+
+**CRITICAL**: This workflow is designed as a **one-way promotion flow only**:
+- feature → develop → staging → main ✅
+- main → staging → develop ❌ NEVER
+
+**Why this matters:**
+- Commits are squashed at different stages
+- Merging backwards would rewrite history and create conflicts
+- Staging contains detailed feature branch history that main doesn't have
+- Back-merging would duplicate commits with different SHAs
+
+**Prevention strategies:**
+1. Train all team members on the one-way flow rule
+2. Consider adding a GitHub Action to block PRs with wrong source/target
+3. Use CODEOWNERS or branch restrictions where possible
+4. Regular code reviews should catch any incorrect PR directions
+
+### Hotfix Strategy
+
+For emergency fixes, **always start from develop** and fast-track through the normal flow:
+- Create `hotfix/` branch from develop (NOT from main)
+- Follow normal promotion: develop → staging → main
+- Expedite reviews but maintain the flow integrity
+
+### Backup and Emergency Access
 
 - **Backup Access**: Ensure at least one admin has direct access to modify protection rules
 - **Gradual Rollout**: Start with less restrictive rules and tighten them as the team adapts
