@@ -49,7 +49,6 @@ jobs:
       - name: Analyze staging commits for production promotion
         id: analyze
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -71,63 +70,54 @@ jobs:
             exit 0
           fi
 
-          # 1) Prefer baseline from the last merged staging→main PR to handle squash merges correctly
-          echo "🔎 Determining baseline from the last merged staging→main PR..."
-          LAST_MERGED_PR="$(gh pr list --base main --head staging --state merged --limit 1 --json number --jq '.[0].number' || true)"
-          BASELINE_REF=""
-          BASELINE_SOURCE=""
-
-          if [ -n "${LAST_MERGED_PR:-}" ] && [ "${LAST_MERGED_PR}" != "null" ]; then
-            echo "ℹ️ Last merged PR detected: #${LAST_MERGED_PR}"
-            # Get the last commit OID from that PR.
-            # Handle multiple possible shapes that gh might return for commits:
-            # - commits.nodes[].commit.oid (GraphQL connection)
-            # - commits.nodes[].oid
-            # - commits[].oid (flattened array)
-            LAST_PR_COMMIT="$(gh pr view "${LAST_MERGED_PR}" --json commits --jq '.commits.nodes[-1].commit.oid // .commits.nodes[-1].oid // .commits[-1].oid' 2>/dev/null || true)"
-            echo "ℹ️ Last merged PR commit: ${LAST_PR_COMMIT}"
-            if [ -n "${LAST_PR_COMMIT:-}" ] && git cat-file -e "${LAST_PR_COMMIT}^{commit}" 2>/dev/null && git merge-base --is-ancestor "${LAST_PR_COMMIT}" HEAD; then
-              BASELINE_REF="${LAST_PR_COMMIT}"
-              BASELINE_SOURCE="last_merged_pr_commit"
-              echo "✅ Using PR #${LAST_MERGED_PR} last commit as baseline: ${BASELINE_REF}"
-            else
-              echo "⚠️ Could not use PR baseline (commit missing or not ancestor of staging)."
+          echo "🔎 Find the last point where main was merged back into staging..."
+          # Look for merge commits in staging where main was brought in
+          # These commits mark synchronization points after a promotion
+          LAST_SYNC_SHA=""
+          for commit in $(git log HEAD --merges --format=%H | head -50); do
+            # Check if commit message indicates main was merged into staging
+            msg=$(git log -1 --format=%s "$commit")
+            if echo "$msg" | grep -qi "merge.*main"; then
+              LAST_SYNC_SHA="$commit"
+              echo "ℹ️ Found last main→staging sync at: ${commit:0:9}"
+              echo "   Commit: $msg"
+              break
             fi
+          done
+
+          # If no explicit merge found, use git merge-base as fallback
+          if [ -z "$LAST_SYNC_SHA" ]; then
+            echo "🔎 No main→staging merge commit found"
+            echo "   Trying merge-base between staging and main..."
+            if LAST_SYNC_SHA=$(git merge-base origin-main HEAD 2>/dev/null); then
+              echo "ℹ️ Using merge-base as starting point: ${LAST_SYNC_SHA:0:9}"
+            else
+              echo "⚠️  No common ancestor found between staging and main"
+              echo "   This may happen if main was rewritten or is a shallow clone"
+              echo "   Using all commits in staging as potentially new"
+              LAST_SYNC_SHA=""
+            fi
+          fi
+
+          # Determine the range to analyze
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            LOG_RANGE="${LAST_SYNC_SHA}..HEAD"
           else
-            echo "ℹ️ No merged staging→main PR found yet."
+            # No sync point found - analyze all commits in staging
+            LOG_RANGE="HEAD"
           fi
 
-          # 2) Fallback: use last release_* tag reachable from main (your current logic)
-          if [ -z "${BASELINE_REF:-}" ]; then
-            echo "🔎 Fallback: Find last release_* tag reachable from main..."
-            LAST_MAIN_TAG=""
-            for t in $(git tag --list 'release_*' --sort=-creatordate); do
-              if git merge-base --is-ancestor "$(git rev-parse "$t^{commit}")" origin-main; then
-                LAST_MAIN_TAG="$t"
-                break
-              fi
-            done
+          echo "📝 Analyzing commits in range: $LOG_RANGE"
 
-            if [ -n "$LAST_MAIN_TAG" ]; then
-              BASELINE_REF="$LAST_MAIN_TAG"
-              BASELINE_SOURCE="last_main_release_tag"
-              echo "✅ Using last main release tag as baseline: ${BASELINE_REF}"
-            else
-              # ultimate fallback: compare directly to origin-main
-              BASELINE_REF="origin-main"
-              BASELINE_SOURCE="origin_main_head"
-              echo "⚠️ No main release tag found; using ${BASELINE_REF} as baseline."
-            fi
+          # Get all commits to analyze
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse "$LOG_RANGE" || true)
+          else
+            mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse HEAD || true)
           fi
 
-          # 3) Build range of commits strictly after the baseline on staging
-          LOG_RANGE="${BASELINE_REF}..HEAD"
-          echo "🧭 Commit range to analyze: ${LOG_RANGE} (baseline source: ${BASELINE_SOURCE})"
-
-          echo "📝 Collect SHAs in range (no merges, oldest first)..."
-          mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse "$LOG_RANGE" || true)
           if [ "${#SHAS_IN_RANGE[@]}" -eq 0 ]; then
-            echo "ℹ️ No candidate commits in range"
+            echo "ℹ️ No commits found since last sync with main"
             {
               echo "promotion_needed=false"
               echo "commit_count=0"
@@ -139,11 +129,41 @@ jobs:
             exit 0
           fi
 
-          # With a PR-baseline this list already contains only new work since last promotion.
-          # For tag-baseline fallback, some historical commits may still appear due to squash merges,
-          # but in normal flow the PR-baseline will be present and accurate.
+          echo "🔍 Verifying commits are truly new (not already in main)..."
+          # Use git cherry to double-check content isn't already in main
+          # This handles edge cases like cherry-picks or content duplication
+          mapfile -t CHERRY_PLUS < <(git cherry -v origin-main HEAD | awk '$1=="+"{print $2}' || true)
 
-          TIMESTAMP="$(date +'%d/%m/%Y %H:%M:%S UTC')"
+          # Intersect: only keep commits that are in range AND marked new by cherry
+          TMP_RANGE=/tmp/shas_in_range.txt
+          TMP_CHERRY=/tmp/cherry_plus.txt
+          printf "%s\n" "${SHAS_IN_RANGE[@]}" > "$TMP_RANGE"
+          printf "%s\n" "${CHERRY_PLUS[@]}" > "$TMP_CHERRY"
+
+          FILTERED_SHAS=()
+          for sha in "${SHAS_IN_RANGE[@]}"; do
+            if grep -Fxq "$sha" "$TMP_CHERRY"; then
+              FILTERED_SHAS+=("$sha")
+            fi
+          done
+
+          echo "🧪 Diagnostics:"
+          echo "  • Commits since last main→staging sync: ${#SHAS_IN_RANGE[@]}"
+          echo "  • Commits marked new by git cherry: ${#CHERRY_PLUS[@]}"
+          echo "  • Final commits to promote: ${#FILTERED_SHAS[@]}"
+
+          if [ "${#FILTERED_SHAS[@]}" -eq 0 ]; then
+            echo "✅ No new content to promote (all changes already in main)"
+            {
+              echo "promotion_needed=false"
+              echo "commit_count=0"
+              echo "release_tag="
+              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S UTC')"
+              echo "existing_pr="
+              echo "new_commits="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           echo "🔎 Check if an open staging→main PR exists and try to reuse its tag..."
           EXISTING_PR="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' || true)"
@@ -155,6 +175,7 @@ jobs:
             EXISTING_TAG="$(printf "%s" "$PR_TEXT" | sed -nE 's/.*Release Tag[^`]*`([^`]+)`.*/\1/p' | head -n1 || true)"
           fi
 
+          TIMESTAMP="$(date +'%d/%m/%Y %H:%M:%S UTC')"
           if [ -n "${EXISTING_TAG:-}" ]; then
             RELEASE_TAG="$EXISTING_TAG"
             echo "🔁 Reusing existing PR release tag: $RELEASE_TAG"
@@ -163,19 +184,19 @@ jobs:
             echo "🆕 Generated new release tag: $RELEASE_TAG"
           fi
 
-          # Build human-readable list for PR body
+          # Build human-readable list for PR body and the SHAs to pick (oldest first preserved)
           NEW_COMMITS=""
-          for sha in "${SHAS_IN_RANGE[@]}"; do
+          for sha in "${FILTERED_SHAS[@]}"; do
             subj="$(git log -n1 --format=%s "$sha")"
             NEW_COMMITS+="${sha:0:7} ${subj}"$'\n'
           done
-          COMMIT_COUNT="${#SHAS_IN_RANGE[@]}"
+
+          COMMIT_COUNT="${#FILTERED_SHAS[@]}"
 
           echo "📊 Analysis Results:"
           echo "  • Commits to promote: $COMMIT_COUNT"
           echo "  • Release tag: $RELEASE_TAG"
           echo "  • Timestamp: $TIMESTAMP"
-          echo "  • Baseline source: $BASELINE_SOURCE"
           echo ""
           echo "📝 Commits to be promoted to production:"
           printf "%s\n" "$NEW_COMMITS"
