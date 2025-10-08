@@ -9,11 +9,6 @@ on:
         required: true
         default: true
         type: boolean
-      promotion_notes:
-        description: "Notes for this staging promotion"
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: write
@@ -31,6 +26,9 @@ jobs:
       timestamp: ${{ steps.analyze.outputs.timestamp }}
       new_commits: ${{ steps.analyze.outputs.new_commits }}
       existing_pr: ${{ steps.analyze.outputs.existing_pr }}
+      groups: ${{ steps.analyze.outputs.groups }}
+      grouped_commits_md: ${{ steps.analyze.outputs.grouped_commits_md }}
+      feature_prs_md: ${{ steps.analyze.outputs.feature_prs_md }}
 
     steps:
       - name: Checkout develop
@@ -71,7 +69,8 @@ jobs:
           fi
 
           echo "📝 Getting commits to promote (develop -> staging)..."
-          # Get all commits in develop that are not in staging
+          # Get SHAs (oldest first) and human lines for PR body
+          mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse origin-staging..HEAD || true)
           mapfile -t COMMITS < <(git log origin-staging..HEAD --oneline --no-merges || true)
 
           if [ "${#COMMITS[@]}" -eq 0 ]; then
@@ -114,13 +113,59 @@ jobs:
 
           COMMIT_COUNT="${#COMMITS[@]}"
 
+          # Group by feature head ref using GitHub API (first associated PR)
+          declare -A GROUP_TO_SHAS
+          declare -A GROUP_TO_PR
+
+          for sha in "${SHAS_IN_RANGE[@]}"; do
+            pr_json="$(gh api -H "Accept: application/vnd.github+json" repos/${GITHUB_REPOSITORY}/commits/${sha}/pulls --jq '.[0] | {url: .html_url, head: .head.ref}' 2>/dev/null || true)"
+            group=""
+            pr_url=""
+            if [ -n "$pr_json" ]; then
+              group="$(printf '%s' "$pr_json" | jq -r '.head // empty')"
+              pr_url="$(printf '%s' "$pr_json" | jq -r '.url // empty')"
+            fi
+            if [[ -z "$group" || ! "$group" =~ ^feature/ ]]; then
+              group="misc/ungrouped"
+            fi
+            if [ -n "${GROUP_TO_SHAS[$group]:-}" ]; then
+              GROUP_TO_SHAS[$group]="${GROUP_TO_SHAS[$group]} $sha"
+            else
+              GROUP_TO_SHAS[$group]="$sha"
+            fi
+            if [ -n "$pr_url" ] && [ -z "${GROUP_TO_PR[$group]:-}" ]; then
+              GROUP_TO_PR[$group]="$pr_url"
+            fi
+          done
+
+          GROUPED_MD=$'### 🧩 Commits Grouped by Feature\n\n'
+          FEATURE_PRS_MD=$'### 🔗 Feature PRs\n\n'
+          GROUPS_LINES=""
+
+          mapfile -t GROUP_NAMES < <(printf '%s\n' "${!GROUP_TO_SHAS[@]}" | sort)
+          for group in "${GROUP_NAMES[@]}"; do
+            shas_line="${GROUP_TO_SHAS[$group]}"
+            GROUPS_LINES+="$group|$shas_line"$'\n'
+            GROUPED_MD+="#### $group"$'\n'
+            pr_link="${GROUP_TO_PR[$group]:-}"
+            if [ -n "$pr_link" ]; then
+              FEATURE_PRS_MD+="- $group: $pr_link"$'\n'
+              GROUPED_MD+="PR: $pr_link"$'\n'
+            fi
+            for s in $shas_line; do
+              subj="$(git log -n1 --format=%s "$s")"
+              GROUPED_MD+="- ${s:0:7} ${subj}"$'\n'
+            done
+            GROUPED_MD+=$'\n'
+          done
+
           echo "📊 Analysis Results:"
           echo "  • Commits to promote: $COMMIT_COUNT"
           echo "  • Promotion ID: $PROMOTION_ID"
           echo "  • Timestamp: $TIMESTAMP"
           echo ""
-          echo "📝 Commits to be promoted to staging:"
-          printf "%s\n" "$NEW_COMMITS"
+          echo "📝 Commits to be promoted to staging (grouped):"
+          printf "%s\n" "$GROUPED_MD"
           echo ""
 
           {
@@ -135,6 +180,21 @@ jobs:
             printf "%s\n" "$NEW_COMMITS"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          {
+            echo "groups<<EOF"
+            printf "%s\n" "$GROUPS_LINES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "grouped_commits_md<<EOF"
+            printf "%s\n" "$GROUPED_MD"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "feature_prs_md<<EOF"
+            printf "%s\n" "$FEATURE_PRS_MD"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
   # Job 2: Create Staging Promotion PR
   create-pr:
@@ -147,17 +207,46 @@ jobs:
       pr_url: ${{ steps.create_pr.outputs.pr_url }}
 
     steps:
-      - name: Checkout develop
+      - name: Checkout staging
         uses: actions/checkout@v4
         with:
-          ref: develop
+          ref: staging
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Ensure full fetch
-        run: git fetch --all --prune
+      - name: Ensure full fetch (including develop)
+        run: |
+          git fetch --all --prune
+          git fetch origin develop:origin-develop --prune
 
-      - name: Create or reuse PR from develop to staging
+      - name: Build temp release branch with grouped squash commits
+        id: build_temp_branch
+        run: |
+          set -euo pipefail
+
+          PROMOTION_ID="${{ needs.commit-analysis.outputs.promotion_id }}"
+          TEMP_BRANCH="staging-promotion/${PROMOTION_ID}"
+
+          echo "📦 Creating temp branch from staging: $TEMP_BRANCH"
+          git checkout -B "$TEMP_BRANCH" origin/staging
+
+          echo "🔀 Applying grouped cherry-picks as squash commits"
+          GROUPS_DATA='${{ needs.commit-analysis.outputs.groups }}'
+          echo "$GROUPS_DATA" | while IFS='|' read -r group shas; do
+            [ -z "$group" ] && continue
+            [ -z "$shas" ] && continue
+            echo "  • Group: $group"
+            echo "    SHAs: $shas"
+            git cherry-pick -n $shas
+            git commit -m "$group"
+          done
+
+          echo "🚀 Pushing temp branch"
+          git push -u origin "$TEMP_BRANCH" --force
+
+          echo "temp_branch=$TEMP_BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Create or reuse PR from temp branch to staging
         id: create_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -166,16 +255,7 @@ jobs:
 
           REPO="${GITHUB_REPOSITORY}"
 
-          TITLE="🚀 Staging Promotion: ${{ needs.commit-analysis.outputs.promotion_id }}"
-
-          # Prepare promotion notes section
-          if [ -n "${{ inputs.promotion_notes }}" ]; then
-            PROMOTION_NOTES_SECTION="### 📝 Promotion Notes
-          ${{ inputs.promotion_notes }}"
-          else
-            PROMOTION_NOTES_SECTION="### 📝 Promotion Notes
-          > No additional notes provided for this promotion."
-          fi
+          TITLE="Staging Promotion: ${{ needs.commit-analysis.outputs.promotion_id }}"
 
           BODY_CONTENT="## 🚀 Staging Promotion
 
@@ -189,17 +269,17 @@ jobs:
           - **Target**: \`staging\`
           - **Triggered By**: @${{ github.actor }} via manual workflow dispatch
 
-          ${PROMOTION_NOTES_SECTION}
+          ### 🔗 Feature PRs
+          ${{ needs.commit-analysis.outputs.feature_prs_md }}
 
           ### 📝 Commits to be Deployed
-          \`\`\`text
-          ${{ needs.commit-analysis.outputs.new_commits }}
-          \`\`\`
+          ${{ needs.commit-analysis.outputs.grouped_commits_md }}
 
           ### 🔄 What Happens on Merge
-          1. Commits will be squashed into staging (if configured)
-          2. Staging deployment will be triggered
-          3. Changes will be available for testing in staging environment
+          1. This PR branch contains one commit per feature group
+          2. Merge with "Create a merge commit" or "Rebase and merge" to preserve grouped commits
+          3. Staging deployment will be triggered
+          4. Changes will be available for testing in staging environment
 
           ### ✅ Pre-merge Checklist
           - [ ] Code review complete
@@ -212,19 +292,19 @@ jobs:
 
           👥 Reviewers: @rahulcheryala"
 
-          echo "📝 Ensuring PR base=staging head=develop"
+          echo "📝 Ensuring PR base=staging head=${{ steps.build_temp_branch.outputs.temp_branch }}"
 
-          echo "🔎 Checking for existing open PR from develop → staging..."
-          EXISTING_NUMBER="$(gh pr list --base staging --head develop --state open --json number --jq '.[0].number' || true)"
+          echo "🔎 Checking for existing open PR from temp branch → staging..."
+          EXISTING_NUMBER="$(gh pr list --base staging --head "${{ steps.build_temp_branch.outputs.temp_branch }}" --state open --json number --jq '.[0].number' || true)"
           if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
             PR_NUMBER="$EXISTING_NUMBER"
             echo "🔁 Reusing PR #$PR_NUMBER and updating title/body..."
             gh api -X PATCH "repos/${REPO}/pulls/${PR_NUMBER}" -f title="$TITLE" -f body="$BODY_CONTENT" >/dev/null
           else
-            echo "🆕 Creating PR base=staging head=develop..."
+            echo "🆕 Creating PR base=staging head=${{ steps.build_temp_branch.outputs.temp_branch }}..."
             PR_NUMBER="$(gh api -X POST "repos/${REPO}/pulls" \
               -f title="$TITLE" \
-              -f head="develop" \
+              -f head="${{ steps.build_temp_branch.outputs.temp_branch }}" \
               -f base="staging" \
               -f body="$BODY_CONTENT" \
               --jq .number)"
