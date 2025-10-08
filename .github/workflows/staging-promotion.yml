@@ -270,16 +270,36 @@ jobs:
         run: |
           git fetch --all --prune
           git fetch origin develop:origin-develop --prune
+          # Also fetch the promoter branch if it exists
+          git fetch origin staging-promoter:origin-staging-promoter || true
 
-      - name: Build temp release branch with grouped squash commits
+      - name: Detect existing PR for promoter branch
+        id: check_existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          HEAD_BRANCH="staging-promoter"
+          EXISTING_NUMBER="$(gh pr list --base staging --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number' || true)"
+          if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "pr_number=$EXISTING_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_url=https://github.com/${REPO}/pull/${EXISTING_NUMBER}" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build promoter branch with grouped squash commits
+        if: steps.check_existing.outputs.exists != 'true'
         id: build_temp_branch
         run: |
           set -euo pipefail
 
           PROMOTION_ID="${{ needs.commit-analysis.outputs.promotion_id }}"
-          TEMP_BRANCH="staging-promotion/${PROMOTION_ID}"
+          TEMP_BRANCH="staging-promoter"
 
-          echo "📦 Creating temp branch from staging: $TEMP_BRANCH"
+          echo "📦 Creating promoter branch from staging: $TEMP_BRANCH"
           git checkout -B "$TEMP_BRANCH" origin/staging
 
           echo "👤 Configuring git author for commits"
@@ -297,12 +317,12 @@ jobs:
             git commit -m "$group"
           done
 
-          echo "🚀 Pushing temp branch"
+          echo "🚀 Pushing promoter branch"
           git push -u origin "$TEMP_BRANCH" --force
 
           echo "temp_branch=$TEMP_BRANCH" >> "$GITHUB_OUTPUT"
 
-      - name: Create or reuse PR from temp branch to staging
+      - name: Create or reuse PR from promoter branch to staging
         id: create_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -313,7 +333,7 @@ jobs:
 
           TITLE="Staging Promotion: ${{ needs.commit-analysis.outputs.promotion_id }}"
 
-          HEAD_BRANCH="${{ steps.build_temp_branch.outputs.temp_branch }}"
+          HEAD_BRANCH="staging-promoter"
 
           echo "📝 Ensuring PR base=staging head=${HEAD_BRANCH}"
 
@@ -332,21 +352,25 @@ jobs:
             echo "- **Target**: \`staging\`"
             echo "- **Triggered By**: @${{ github.actor }} via manual workflow dispatch"
             echo ""
+
             if [ -n "${{ needs.commit-analysis.outputs.feature_prs_md }}" ]; then
               echo "### 🔗 Feature PRs"
               echo "${{ needs.commit-analysis.outputs.feature_prs_md }}"
               echo ""
             fi
-            echo "### 📝 Commits to be Deployed"
-            echo "### 🧩 Commits Grouped by Feature"
+
+            echo "### 📝 Features to be Deployed"
+            echo "#### 🧩 Commits Grouped by Feature"
             echo "${{ needs.commit-analysis.outputs.grouped_commits_md }}"
             echo ""
+
             echo "### 🔄 What Happens on Merge"
             echo "1. This PR branch contains one commit per feature group"
             echo "2. Merge with \"Create a merge commit\" or \"Rebase and merge\" to preserve grouped commits"
             echo "3. Staging deployment will be triggered"
             echo "4. Changes will be available for testing in staging environment"
             echo ""
+
             echo "### ✅ Pre-merge Checklist"
             echo "- [ ] Code review complete"
             echo "- [ ] All tests passing on develop"
@@ -359,7 +383,7 @@ jobs:
             echo "👥 Reviewers: @rahulcheryala"
           } > "$BODY_FILE"
 
-          echo "🔎 Checking for existing open PR from temp branch → staging..."
+          echo "🔎 Checking for existing open PR from promoter branch → staging..."
           EXISTING_NUMBER="$(gh pr list --base staging --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number' || true)"
           BODY_TEXT="$(cat "$BODY_FILE")"
           if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then

@@ -53,3 +53,14 @@ jobs:
           git push origin develop
 
           echo "✅ Staging successfully synced to develop!"
+
+      - name: Delete promoter branch staging-promoter
+        run: |
+          set -euo pipefail
+          echo "🧹 Deleting remote branch staging-promoter if present..."
+          if git ls-remote --heads origin staging-promoter | grep -q 'refs/heads/staging-promoter'; then
+            git push origin --delete staging-promoter || true
+            echo "✅ Deleted remote branch staging-promoter"
+          else
+            echo "ℹ️ Remote branch staging-promoter not found; skipping"
+          fi
