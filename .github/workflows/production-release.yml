@@ -64,7 +64,7 @@ jobs:
               echo "promotion_needed=false"
               echo "commit_count=0"
               echo "release_tag="
-              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S %Z')"
+              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S %z')"
               echo "existing_pr="
               echo "new_commits="
             } >> "$GITHUB_OUTPUT"
@@ -125,7 +125,7 @@ jobs:
               echo "promotion_needed=false"
               echo "commit_count=0"
               echo "release_tag="
-              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S %Z')"
+              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S %z')"
               echo "existing_pr="
               echo "new_commits="
             } >> "$GITHUB_OUTPUT"
@@ -142,7 +142,7 @@ jobs:
               echo "promotion_needed=false"
               echo "commit_count=0"
               echo "release_tag="
-              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S %Z')"
+              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S %z')"
               echo "existing_pr="
               echo "new_commits="
             } >> "$GITHUB_OUTPUT"
@@ -159,7 +159,7 @@ jobs:
             EXISTING_TAG="$(printf "%s" "$PR_TEXT" | sed -nE 's/.*Release Tag[^`]*`([^`]+)`.*/\1/p' | head -n1 || true)"
           fi
 
-          TIMESTAMP="$(date +'%d/%m/%Y %H:%M:%S %Z')"
+          TIMESTAMP="$(date +'%d/%m/%Y %H:%M:%S %z')"
           if [ -n "${EXISTING_TAG:-}" ]; then
             RELEASE_TAG="$EXISTING_TAG"
             echo "🔁 Reusing existing PR release tag: $RELEASE_TAG"
