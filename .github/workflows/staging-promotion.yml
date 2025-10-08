@@ -266,7 +266,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Ensure full fetch (including develop)
+      - name: Ensure full fetch
         run: |
           git fetch --all --prune
           git fetch origin develop:origin-develop --prune
@@ -283,9 +283,11 @@ jobs:
           HEAD_BRANCH="staging-promoter"
           EXISTING_NUMBER="$(gh pr list --base staging --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number' || true)"
           if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
+            PR_NUMBER="$EXISTING_NUMBER"
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "pr_number=$EXISTING_NUMBER" >> "$GITHUB_OUTPUT"
             echo "pr_url=https://github.com/${REPO}/pull/${EXISTING_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "🔁 Reusing PR #$PR_NUMBER and updating title/body..."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
@@ -301,6 +303,7 @@ jobs:
 
           echo "📦 Creating promoter branch from staging: $TEMP_BRANCH"
           git checkout -B "$TEMP_BRANCH" origin/staging
+          echo ""
 
           echo "👤 Configuring git author for commits"
           git config user.name "github-actions[bot]"
@@ -313,9 +316,12 @@ jobs:
             [ -z "$shas" ] && continue
             echo "  • Group: $group"
             echo "    SHAs: $shas"
+            echo ""
             git cherry-pick -n $shas
             git commit -m "$group"
           done
+          echo ""
+          echo ""
 
           echo "🚀 Pushing promoter branch"
           git push -u origin "$TEMP_BRANCH" --force
