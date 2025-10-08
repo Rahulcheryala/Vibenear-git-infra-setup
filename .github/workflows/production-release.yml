@@ -31,6 +31,7 @@ jobs:
       timestamp: ${{ steps.analyze.outputs.timestamp }}
       new_commits: ${{ steps.analyze.outputs.new_commits }}
       existing_pr: ${{ steps.analyze.outputs.existing_pr }}
+      shas: ${{ steps.analyze.outputs.shas }}
 
     steps:
       - name: Checkout staging
@@ -64,7 +65,7 @@ jobs:
               echo "promotion_needed=false"
               echo "commit_count=0"
               echo "release_tag="
-              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S UTC')"
+              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S %z')"
               echo "existing_pr="
               echo "new_commits="
             } >> "$GITHUB_OUTPUT"
@@ -125,7 +126,7 @@ jobs:
               echo "promotion_needed=false"
               echo "commit_count=0"
               echo "release_tag="
-              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S UTC')"
+              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S %z')"
               echo "existing_pr="
               echo "new_commits="
             } >> "$GITHUB_OUTPUT"
@@ -142,7 +143,7 @@ jobs:
               echo "promotion_needed=false"
               echo "commit_count=0"
               echo "release_tag="
-              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S UTC')"
+              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S %z')"
               echo "existing_pr="
               echo "new_commits="
             } >> "$GITHUB_OUTPUT"
@@ -159,7 +160,7 @@ jobs:
             EXISTING_TAG="$(printf "%s" "$PR_TEXT" | sed -nE 's/.*Release Tag[^`]*`([^`]+)`.*/\1/p' | head -n1 || true)"
           fi
 
-          TIMESTAMP="$(date +'%d/%m/%Y %H:%M:%S UTC')"
+          TIMESTAMP="$(date +'%d/%m/%Y %H:%M:%S %z')"
           if [ -n "${EXISTING_TAG:-}" ]; then
             RELEASE_TAG="$EXISTING_TAG"
             echo "🔁 Reusing existing PR release tag: $RELEASE_TAG"
@@ -184,7 +185,7 @@ jobs:
           echo "  • Timestamp: $TIMESTAMP"
           echo ""
           echo "📝 Commits to be promoted to production:"
-          printf "%s\n" "$NEW_COMMITS"
+          printf "%s" "$NEW_COMMITS"
           echo ""
 
           {
@@ -196,7 +197,12 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           {
             echo "new_commits<<EOF"
-            printf "%s\n" "$NEW_COMMITS"
+            printf "%s" "$NEW_COMMITS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "shas<<EOF"
+            printf "%s\n" "${SHAS_IN_RANGE[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -219,9 +225,55 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ensure full fetch
-        run: git fetch --all --prune --tags
+        run: |
+          git fetch --all --prune --tags
+          # Also fetch the promoter branch if it exists
+          git fetch origin production-promoter:origin-production-promoter || true
 
-      - name: Create or reuse PR from staging to main
+      - name: Detect existing PR for promoter branch
+        id: check_existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          HEAD_BRANCH="production-promoter"
+          EXISTING_NUMBER="$(gh pr list --base main --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number' || true)"
+          if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "pr_number=$EXISTING_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_url=https://github.com/${REPO}/pull/${EXISTING_NUMBER}" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build promoter branch with exact cherry-picks
+        if: steps.check_existing.outputs.exists != 'true'
+        id: build_promoter
+        run: |
+          set -euo pipefail
+
+          HEAD_BRANCH="production-promoter"
+          echo "📦 Creating promoter branch from main: $HEAD_BRANCH"
+          git checkout -B "$HEAD_BRANCH" origin/main
+
+          echo "👤 Configuring git author for commits"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          echo "🔀 Cherry-picking exact analyzed SHAs in order"
+          mapfile -t SHAS < <(printf "%s\n" "${{ needs.commit-analysis.outputs.shas }}" | sed '/^$/d')
+          if [ "${#SHAS[@]}" -eq 0 ]; then
+            echo "No SHAs provided; nothing to cherry-pick"
+          else
+            git cherry-pick -n ${SHAS[*]}
+            git commit -m "Production promotion: apply analyzed commits"
+          fi
+
+          echo "🚀 Pushing promoter branch"
+          git push -u origin "$HEAD_BRANCH" --force
+
+      - name: Create or reuse PR from promoter branch to main
         id: create_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -243,6 +295,8 @@ jobs:
           > Please add release notes describing the changes in this release before merging."
           fi
 
+          HEAD_BRANCH="production-promoter"
+
           BODY_CONTENT="## 🚀 Production Deployment
 
           This PR promotes the staging environment to production.
@@ -263,15 +317,11 @@ jobs:
           ${RELEASE_NOTES_SECTION}
 
           ### 🔄 What Happens on Merge
-          1. Squash merge into a single release commit
-          2. Tag \`${{ needs.commit-analysis.outputs.release_tag }}\` will be created (by post-merge workflow)
-          3. Production deployment triggered
-          4. Clean history: one commit per production release
-
-          ### ⚠️ Important
-          - Deploys to **PRODUCTION**
-          - Rollback = revert the single release commit
-          - Ensure all staging validations are complete
+          1. This PR uses a fixed promoter branch \`production-promoter\`
+          2. Use GitHub's \"Squash and merge\" to produce a single release commit
+          3. Tag \`${{ needs.commit-analysis.outputs.release_tag }}\` will be created (by post-merge workflow)
+          4. Production deployment triggered
+          5. Clean history: one commit per production release
 
           ### ✅ Pre-deployment Checklist
           - [ ] Staging tests passed
@@ -284,19 +334,19 @@ jobs:
 
           👥 Reviewers: @rahulcheryala @your-senior-dev"
 
-          echo "📝 Ensuring PR base=main head=staging"
+          echo "📝 Ensuring PR base=main head=${HEAD_BRANCH}"
 
-          echo "🔎 Checking for existing open PR from staging → main..."
-          EXISTING_NUMBER="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' || true)"
+          echo "🔎 Checking for existing open PR from promoter branch → main..."
+          EXISTING_NUMBER="$(gh pr list --base main --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number' || true)"
           if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
             PR_NUMBER="$EXISTING_NUMBER"
             echo "🔁 Reusing PR #$PR_NUMBER and updating title/body..."
             gh api -X PATCH "repos/${REPO}/pulls/${PR_NUMBER}" -f title="$TITLE" -f body="$BODY_CONTENT" >/dev/null
           else
-            echo "🆕 Creating PR base=main head=staging..."
+            echo "🆕 Creating PR base=main head=$HEAD_BRANCH..."
             PR_NUMBER="$(gh api -X POST "repos/${REPO}/pulls" \
               -f title="$TITLE" \
-              -f head="staging" \
+              -f head="$HEAD_BRANCH" \
               -f base="main" \
               -f body="$BODY_CONTENT" \
               --jq .number)"
