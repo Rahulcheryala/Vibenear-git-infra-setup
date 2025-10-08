@@ -298,11 +298,11 @@ jobs:
           ${RELEASE_NOTES_SECTION}
 
           ### 🔄 What Happens on Merge
-          1. This PR uses a fixed promoter branch \"production-promoter\"
-          2. Use GitHub's "Squash and merge" to produce a single release commit
-          2. Tag \`${{ needs.commit-analysis.outputs.release_tag }}\` will be created (by post-merge workflow)
-          3. Production deployment triggered
-          4. Clean history: one commit per production release
+          1. This PR uses a fixed promoter branch \`production-promoter\`
+          2. Use GitHub's \"Squash and merge\" to produce a single release commit
+          3. Tag \`${{ needs.commit-analysis.outputs.release_tag }}\` will be created (by post-merge workflow)
+          4. Production deployment triggered
+          5. Clean history: one commit per production release
 
           ### ✅ Pre-deployment Checklist
           - [ ] Staging tests passed
