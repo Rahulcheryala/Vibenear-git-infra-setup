@@ -1,4 +1,5 @@
-name: Promote to Staging Helper
+name: Staging Promotion
+run-name: PR from develop to staging by @${{ github.actor }}
 
 on:
   workflow_dispatch:
@@ -8,11 +9,28 @@ on:
         required: true
         default: true
         type: boolean
+      promotion_notes:
+        description: "Notes for this staging promotion"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
-  promote-to-staging:
+  # Job 1: Analyze Develop Commits
+  commit-analysis:
+    name: Commit Analysis
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
+    outputs:
+      promotion_needed: ${{ steps.analyze.outputs.promotion_needed }}
+      commit_count: ${{ steps.analyze.outputs.commit_count }}
+      promotion_id: ${{ steps.analyze.outputs.promotion_id }}
+      timestamp: ${{ steps.analyze.outputs.timestamp }}
+      new_commits: ${{ steps.analyze.outputs.new_commits }}
+      existing_pr: ${{ steps.analyze.outputs.existing_pr }}
 
     steps:
       - name: Checkout develop
@@ -22,41 +40,234 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get commits since last staging merge
-        id: get_commits
+      - name: Fetch staging branch
         run: |
-          # Get the last merge commit to staging
-          LAST_STAGING_COMMIT=$(git log staging..develop --oneline | tail -1 | cut -d' ' -f1)
+          echo "📥 Fetching staging branch for comparison..."
+          git fetch origin staging:origin-staging
+          echo "✅ Staging branch fetched successfully"
 
-          if [ -z "$LAST_STAGING_COMMIT" ]; then
-            echo "No new commits to promote"
+      - name: Analyze develop commits for staging promotion
+        id: analyze
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "📥 Ensuring origin/staging is up to date..."
+          git fetch origin staging:origin-staging
+
+          echo "🔍 Quick tree diff (develop vs staging)..."
+          if git diff --quiet origin-staging..HEAD; then
+            echo "✅ Develop and staging have identical content"
+            {
+              echo "promotion_needed=false"
+              echo "commit_count=0"
+              echo "promotion_id="
+              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S UTC')"
+              echo "existing_pr="
+              echo "new_commits="
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Get feature branch names from commit messages
-          FEATURES=$(git log staging..develop --oneline --grep="feature/" --pretty=format:"%s" | grep -o "feature/[a-zA-Z0-9\-]*" | sort | uniq)
+          echo "📝 Getting commits to promote (develop -> staging)..."
+          # Get all commits in develop that are not in staging
+          mapfile -t COMMITS < <(git log origin-staging..HEAD --oneline --no-merges || true)
 
-          echo "features<<EOF" >> $GITHUB_OUTPUT
-          echo "$FEATURES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          if [ "${#COMMITS[@]}" -eq 0 ]; then
+            echo "ℹ️ No new commits found in develop"
+            {
+              echo "promotion_needed=false"
+              echo "commit_count=0"
+              echo "promotion_id="
+              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S UTC')"
+              echo "existing_pr="
+              echo "new_commits="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-      - name: Create staging promotion PR
-        if: inputs.create_pr == true
-        uses: peter-evans/create-pull-request@v5
+          echo "🔎 Check if an open develop→staging PR exists..."
+          EXISTING_PR="$(gh pr list --base staging --head develop --state open --json number --jq '.[0].number' || true)"
+          EXISTING_ID=""
+          if [ -n "${EXISTING_PR:-}" ] && [ "${EXISTING_PR}" != "null" ]; then
+            echo "ℹ️ Open PR detected: #$EXISTING_PR"
+            PR_TEXT="$(gh pr view "$EXISTING_PR" --json title,body --jq '[.title,.body]|join("\n")' || true)"
+            # Extract existing Promotion ID if present
+            EXISTING_ID="$(printf "%s" "$PR_TEXT" | sed -nE 's/.*Promotion ID[^`]*`([^`]+)`.*/\1/p' | head -n1 || true)"
+          fi
+
+          TIMESTAMP="$(date +'%d/%m/%Y %H:%M:%S UTC')"
+          if [ -n "${EXISTING_ID:-}" ]; then
+            PROMOTION_ID="$EXISTING_ID"
+            echo "🔁 Reusing existing PR promotion ID: $PROMOTION_ID"
+          else
+            PROMOTION_ID="staging_$(date +'%d-%m-%Y_%H.%M.%S')"
+            echo "🆕 Generated new promotion ID: $PROMOTION_ID"
+          fi
+
+          # Build commits list for PR body
+          NEW_COMMITS=""
+          for commit in "${COMMITS[@]}"; do
+            NEW_COMMITS+="${commit}"$'\n'
+          done
+
+          COMMIT_COUNT="${#COMMITS[@]}"
+
+          echo "📊 Analysis Results:"
+          echo "  • Commits to promote: $COMMIT_COUNT"
+          echo "  • Promotion ID: $PROMOTION_ID"
+          echo "  • Timestamp: $TIMESTAMP"
+          echo ""
+          echo "📝 Commits to be promoted to staging:"
+          printf "%s\n" "$NEW_COMMITS"
+          echo ""
+
+          {
+            echo "promotion_needed=true"
+            echo "commit_count=$COMMIT_COUNT"
+            echo "promotion_id=$PROMOTION_ID"
+            echo "timestamp=$TIMESTAMP"
+            echo "existing_pr=${EXISTING_PR:-}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "new_commits<<EOF"
+            printf "%s\n" "$NEW_COMMITS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  # Job 2: Create Staging Promotion PR
+  create-pr:
+    name: Create Staging PR
+    runs-on: ubuntu-latest
+    needs: commit-analysis
+    if: needs.commit-analysis.outputs.promotion_needed == 'true' && inputs.create_pr
+    outputs:
+      pr_number: ${{ steps.create_pr.outputs.pr_number }}
+      pr_url: ${{ steps.create_pr.outputs.pr_url }}
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
         with:
+          ref: develop
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          branch: auto/staging-promotion
-          base: staging
-          title: "🚀 Promote features to staging"
-          body: |
-            ## Features included in this promotion:
 
-            ${{ steps.get_commits.outputs.features }}
+      - name: Ensure full fetch
+        run: git fetch --all --prune
 
-            ## Deployment Information:
-            - **Source**: develop branch
-            - **Target**: staging environment
-            - **Database**: Staging environment will use staging database
-            - **Auto-deploy**:  Yes (on merge)
+      - name: Create or reuse PR from develop to staging
+        id: create_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
 
-            This PR will automatically deploy to staging environment upon merge.
+          REPO="${GITHUB_REPOSITORY}"
+
+          TITLE="🚀 Staging Promotion: ${{ needs.commit-analysis.outputs.promotion_id }}"
+
+          # Prepare promotion notes section
+          if [ -n "${{ inputs.promotion_notes }}" ]; then
+            PROMOTION_NOTES_SECTION="### 📝 Promotion Notes
+          ${{ inputs.promotion_notes }}"
+          else
+            PROMOTION_NOTES_SECTION="### 📝 Promotion Notes
+          > No additional notes provided for this promotion."
+          fi
+
+          BODY_CONTENT="## 🚀 Staging Promotion
+
+          This PR promotes features from \`develop\` to \`staging\` for testing.
+
+          ### 📋 Promotion Information
+          - **Promotion ID**: \`${{ needs.commit-analysis.outputs.promotion_id }}\`
+          - **Timestamp**: ${{ needs.commit-analysis.outputs.timestamp }}
+          - **Commit Count**: ${{ needs.commit-analysis.outputs.commit_count }} commits
+          - **Source**: \`develop\`
+          - **Target**: \`staging\`
+          - **Triggered By**: @${{ github.actor }} via manual workflow dispatch
+
+          ${PROMOTION_NOTES_SECTION}
+
+          ### 📝 Commits to be Deployed
+          \`\`\`text
+          ${{ needs.commit-analysis.outputs.new_commits }}
+          \`\`\`
+
+          ### 🔄 What Happens on Merge
+          1. Commits will be squashed into staging (if configured)
+          2. Staging deployment will be triggered
+          3. Changes will be available for testing in staging environment
+
+          ### ✅ Pre-merge Checklist
+          - [ ] Code review complete
+          - [ ] All tests passing on develop
+          - [ ] No breaking changes without migration plan
+          - [ ] Ready for QA testing
+
+          ---
+          🔍 This will deploy to **STAGING** environment for testing.
+
+          👥 Reviewers: @rahulcheryala"
+
+          echo "📝 Ensuring PR base=staging head=develop"
+
+          echo "🔎 Checking for existing open PR from develop → staging..."
+          EXISTING_NUMBER="$(gh pr list --base staging --head develop --state open --json number --jq '.[0].number' || true)"
+          if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
+            PR_NUMBER="$EXISTING_NUMBER"
+            echo "🔁 Reusing PR #$PR_NUMBER and updating title/body..."
+            gh api -X PATCH "repos/${REPO}/pulls/${PR_NUMBER}" -f title="$TITLE" -f body="$BODY_CONTENT" >/dev/null
+          else
+            echo "🆕 Creating PR base=staging head=develop..."
+            PR_NUMBER="$(gh api -X POST "repos/${REPO}/pulls" \
+              -f title="$TITLE" \
+              -f head="develop" \
+              -f base="staging" \
+              -f body="$BODY_CONTENT" \
+              --jq .number)"
+          fi
+
+          PR_URL="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .html_url)"
+
+          echo "🏷️ Adding labels and requesting reviewers..."
+          printf '{"labels":["staging","deployment","promotion","auto-generated"]}\n' > labels.json
+          gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/labels" --input labels.json >/dev/null || true
+          printf '{"reviewers":["rahulcheryala"]}\n' > reviewers.json
+          gh api -X POST "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" --input reviewers.json >/dev/null || true
+
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "🔗 PR Link: $PR_URL"
+
+  workflow-summary:
+    name: Workflow Summary
+    runs-on: ubuntu-latest
+    needs: [commit-analysis, create-pr]
+    if: always() && needs.commit-analysis.outputs.promotion_needed == 'true'
+    steps:
+      - name: Display workflow summary
+        run: |
+          echo ""
+          echo "================================================"
+          echo "🚀 STAGING PROMOTION WORKFLOW COMPLETED"
+          echo "================================================"
+          echo ""
+          echo "✅ Analysis complete"
+          if [ "${{ needs.create-pr.result }}" = "success" ]; then
+            echo "✅ PR created/updated"
+          else
+            echo "⚠️ PR not created (skipped or failed)"
+          fi
+          echo ""
+          echo "📋 Promotion Details:"
+          echo "  • Promotion ID: ${{ needs.commit-analysis.outputs.promotion_id }}"
+          echo "  • Timestamp: ${{ needs.commit-analysis.outputs.timestamp }}"
+          echo "  • Commit Count: ${{ needs.commit-analysis.outputs.commit_count }}"
+          echo "  • PR Number: ${{ needs.create-pr.outputs.pr_number }}"
+          echo ""
+          echo "🔗 PR Link: ${{ needs.create-pr.outputs.pr_url }}"
+          echo "🧪 Reminder: Merging deploys to STAGING for testing."
+          echo ""
