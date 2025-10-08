@@ -355,18 +355,22 @@ jobs:
 
           echo "🔎 Checking for existing open PR from temp branch → staging..."
           EXISTING_NUMBER="$(gh pr list --base staging --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number' || true)"
+          BODY_TEXT="$(cat "$BODY_FILE")"
           if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
             PR_NUMBER="$EXISTING_NUMBER"
-            echo "🔁 Reusing PR #$PR_NUMBER and updating title/body..."
-            gh pr edit "$PR_NUMBER" --title "$TITLE" -F "$BODY_FILE" >/dev/null
+            echo "🔁 Reusing PR #$PR_NUMBER and updating title/body via API..."
+            gh api -X PATCH "repos/${REPO}/pulls/${PR_NUMBER}" -f title="$TITLE" -f body="$BODY_TEXT" >/dev/null
           else
-            echo "🆕 Creating PR base=staging head=$HEAD_BRANCH..."
-            PR_URL_CREATED="$(gh pr create -B staging -H "$HEAD_BRANCH" -t "$TITLE" -F "$BODY_FILE" --json url --jq .url)"
-            # Get number from the created PR
-            PR_NUMBER="$(gh pr view "$PR_URL_CREATED" --json number --jq .number)"
+            echo "🆕 Creating PR base=staging head=$HEAD_BRANCH via API..."
+            PR_NUMBER="$(gh api -X POST "repos/${REPO}/pulls" \
+              -f title="$TITLE" \
+              -f head="$HEAD_BRANCH" \
+              -f base="staging" \
+              -f body="$BODY_TEXT" \
+              --jq .number)"
           fi
 
-          PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
+          PR_URL="https://github.com/${REPO}/pull/${PR_NUMBER}"
 
           echo "🏷️ Adding labels and requesting reviewers..."
           printf '{"labels":["staging","deployment","promotion","auto-generated"]}\n' > labels.json
