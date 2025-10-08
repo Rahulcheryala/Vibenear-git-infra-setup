@@ -36,12 +36,6 @@ jobs:
           echo "🔍 Fetching latest main and staging branches..."
           git fetch origin main:origin-main staging:origin-staging
 
-          echo "📊 Checking if sync is needed..."
-          if git diff --quiet origin-staging..origin-main; then
-            echo "✅ Staging and main are already in sync, no action needed"
-            exit 0
-          fi
-
           echo "🔧 Configuring git for merge commit..."
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -51,6 +45,7 @@ jobs:
           git reset --hard origin-staging
 
           echo "🔀 Merging main into staging..."
+          echo "ℹ️  After squash merge to main, we always sync back to create a clean point"
           git merge --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER}" origin-main
 
           echo "⬆️ Pushing staging to remote..."
