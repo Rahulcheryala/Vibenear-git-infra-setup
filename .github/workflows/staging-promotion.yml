@@ -185,8 +185,10 @@ jobs:
             fi
           done
 
-          GROUPED_MD=$'### 🧩 Commits Grouped by Feature\n\n'
-          FEATURE_PRS_MD=$'### 🔗 Feature PRs\n\n'
+          # Build markdown fragments without top-level headers; headers will be
+          # added only where rendered (logs/PR body) to avoid duplication.
+          GROUPED_MD=""
+          FEATURE_PRS_MD=""
           GROUPS_LINES=""
 
           mapfile -t GROUP_NAMES < <(printf '%s\n' "${!GROUP_TO_SHAS[@]}" | sort)
@@ -214,6 +216,7 @@ jobs:
           echo ""
 
           echo "📝 Commits to be promoted to staging (grouped):"
+          echo "🧩 Commits Grouped by Feature"
           printf "%s\n" "$GROUPED_MD"
           echo ""
 
@@ -329,10 +332,13 @@ jobs:
             echo "- **Target**: \`staging\`"
             echo "- **Triggered By**: @${{ github.actor }} via manual workflow dispatch"
             echo ""
-            echo "### 🔗 Feature PRs"
-            echo "${{ needs.commit-analysis.outputs.feature_prs_md }}"
-            echo ""
+            if [ -n "${{ needs.commit-analysis.outputs.feature_prs_md }}" ]; then
+              echo "### 🔗 Feature PRs"
+              echo "${{ needs.commit-analysis.outputs.feature_prs_md }}"
+              echo ""
+            fi
             echo "### 📝 Commits to be Deployed"
+            echo "### 🧩 Commits Grouped by Feature"
             echo "${{ needs.commit-analysis.outputs.grouped_commits_md }}"
             echo ""
             echo "### 🔄 What Happens on Merge"
