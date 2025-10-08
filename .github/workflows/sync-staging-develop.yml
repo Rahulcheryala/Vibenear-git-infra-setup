@@ -1,5 +1,5 @@
-name: Sync develop after PR merge to staging
-run-name: Sync staging to develop
+name: Sync staging and develop
+run-name: Sync develop after PR merge to staging
 
 on:
   pull_request:

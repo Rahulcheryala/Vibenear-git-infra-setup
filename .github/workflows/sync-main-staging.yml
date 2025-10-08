@@ -1,5 +1,6 @@
-name: Sync staging after PR merge to main
-run-name: Sync main to staging
+name: Sync main and staging
+run-name: Sync staging after PR merge to main
+
 on:
   pull_request:
     types: [closed]
