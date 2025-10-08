@@ -255,6 +255,11 @@ jobs:
           - **Target**: \`main\`
           - **Triggered By**: @${{ github.actor }} via manual workflow dispatch
 
+          ### 📝 Features to be Deployed
+          \`\`\`text
+          ${{ needs.commit-analysis.outputs.new_commits }}
+          \`\`\`
+
           ${RELEASE_NOTES_SECTION}
 
           ### 🔄 What Happens on Merge
