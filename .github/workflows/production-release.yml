@@ -1,5 +1,5 @@
 name: Production Release
-run-name: Production Release by @${{ github.actor }}
+run-name: PR from staging to main @${{ github.actor }}
 
 on:
   workflow_dispatch:
@@ -247,6 +247,17 @@ jobs:
 
           TITLE="🚀 Production Release: ${{ needs.commit-analysis.outputs.release_tag }}"
 
+          # Prepare release notes section
+          if [ -n "${{ inputs.release_notes }}" ]; then
+            RELEASE_NOTES_SECTION="### 📒 Release Notes
+          ${{ inputs.release_notes }}"
+          else
+            RELEASE_NOTES_SECTION="### 📒 Release Notes
+          > **⚠️ No release notes provided**
+          >
+          > Please add release notes describing the changes in this release before merging."
+          fi
+
           BODY_CONTENT="## 🚀 Production Deployment
 
           This PR promotes the staging environment to production.
@@ -259,13 +270,7 @@ jobs:
           - **Target**: \`main\`
           - **Triggered By**: @${{ github.actor }} via manual workflow dispatch
 
-          ### 📝 Features to be Deployed
-          \`\`\`text
-          ${{ needs.commit-analysis.outputs.new_commits }}
-          \`\`\`
-
-          ### 📒 Release Notes
-          ${{ inputs.release_notes }}
+          ${RELEASE_NOTES_SECTION}
 
           ### 🔄 What Happens on Merge
           1. Squash merge into a single release commit
