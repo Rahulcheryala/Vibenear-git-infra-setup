@@ -47,13 +47,18 @@ jobs:
 
           echo "🔀 Merging staging into develop..."
           echo "ℹ️  After squash merge to staging, we always sync back to create a clean point"
-          git merge -s ours --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER} origin-staging
+          git merge -s ours --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER}" origin-staging
 
           echo "⬆️ Pushing develop to remote..."
           git push origin develop
 
           echo "✅ Staging successfully synced to develop!"
 
+  delete-promoter-branch:
+    name: Delete promoter branch after PR merge to staging
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'staging-promoter'
+    steps:
       - name: Delete promoter branch staging-promoter
         run: |
           set -euo pipefail
