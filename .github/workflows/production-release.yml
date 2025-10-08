@@ -70,7 +70,7 @@ jobs:
             exit 0
           fi
 
-          echo "🔎 Find the last point where main was merged back into staging..."
+          echo "🔍 Find the last point where main was merged back into staging..."
           # Look for merge commits in staging where main was brought in
           # These commits mark synchronization points after a promotion
           LAST_SYNC_SHA=""
@@ -129,30 +129,10 @@ jobs:
             exit 0
           fi
 
-          echo "🔍 Verifying commits are truly new (not already in main)..."
-          # Use git cherry to double-check content isn't already in main
-          # This handles edge cases like cherry-picks or content duplication
-          mapfile -t CHERRY_PLUS < <(git cherry -v origin-main HEAD | awk '$1=="+"{print $2}' || true)
-
-          # Intersect: only keep commits that are in range AND marked new by cherry
-          TMP_RANGE=/tmp/shas_in_range.txt
-          TMP_CHERRY=/tmp/cherry_plus.txt
-          printf "%s\n" "${SHAS_IN_RANGE[@]}" > "$TMP_RANGE"
-          printf "%s\n" "${CHERRY_PLUS[@]}" > "$TMP_CHERRY"
-
-          FILTERED_SHAS=()
-          for sha in "${SHAS_IN_RANGE[@]}"; do
-            if grep -Fxq "$sha" "$TMP_CHERRY"; then
-              FILTERED_SHAS+=("$sha")
-            fi
-          done
-
-          echo "🧪 Diagnostics:"
+          echo "📊 Analysis Results:"
           echo "  • Commits since last main→staging sync: ${#SHAS_IN_RANGE[@]}"
-          echo "  • Commits marked new by git cherry: ${#CHERRY_PLUS[@]}"
-          echo "  • Final commits to promote: ${#FILTERED_SHAS[@]}"
 
-          if [ "${#FILTERED_SHAS[@]}" -eq 0 ]; then
+          if [ "${#SHAS_IN_RANGE[@]}" -eq 0 ]; then
             echo "✅ No new content to promote (all changes already in main)"
             {
               echo "promotion_needed=false"
@@ -186,12 +166,12 @@ jobs:
 
           # Build human-readable list for PR body and the SHAs to pick (oldest first preserved)
           NEW_COMMITS=""
-          for sha in "${FILTERED_SHAS[@]}"; do
+          for sha in "${SHAS_IN_RANGE[@]}"; do
             subj="$(git log -n1 --format=%s "$sha")"
-            NEW_COMMITS+="${sha:0:7} ${subj}"$'\n'
+            NEW_COMMITS+="${sha:0:7} -> ${subj}"$'\n'
           done
 
-          COMMIT_COUNT="${#FILTERED_SHAS[@]}"
+          COMMIT_COUNT="${#SHAS_IN_RANGE[@]}"
 
           echo "📊 Analysis Results:"
           echo "  • Commits to promote: $COMMIT_COUNT"
