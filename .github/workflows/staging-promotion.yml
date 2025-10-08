@@ -69,12 +69,57 @@ jobs:
           fi
 
           echo "📝 Getting commits to promote (develop -> staging)..."
-          # Get SHAs (oldest first) and human lines for PR body
-          mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse origin-staging..HEAD || true)
-          mapfile -t COMMITS < <(git log origin-staging..HEAD --oneline --no-merges || true)
+          echo ""
 
-          if [ "${#COMMITS[@]}" -eq 0 ]; then
-            echo "ℹ️ No new commits found in develop"
+          echo "🔍 Find the last point where staging was merged back into develop..."
+          # Look for merge commits in develop where staging was brought in
+          # These commits mark synchronization points after a promotion
+          LAST_SYNC_SHA=""
+          for commit in $(git log HEAD --merges --format=%H | head -50); do
+            # Check if commit message indicates staging was merged into develop
+            msg=$(git log -1 --format=%s "$commit")
+            if echo "$msg" | grep -qi "merge.*staging"; then
+              LAST_SYNC_SHA="$commit"
+              echo "ℹ️ Found last staging→develop sync at: ${commit:0:9}"
+              echo "   Commit: $msg"
+              break
+            fi
+          done
+          echo ""
+
+          # If no explicit merge found, use git merge-base as fallback
+          if [ -z "$LAST_SYNC_SHA" ]; then
+            echo "🔎 No staging→develop merge commit found"
+            echo "   Trying merge-base between develop and staging..."
+            if LAST_SYNC_SHA=$(git merge-base origin-staging HEAD 2>/dev/null); then
+              echo "ℹ️ Using merge-base as starting point: ${LAST_SYNC_SHA:0:9}"
+            else
+              echo "⚠️  No common ancestor found between develop and staging"
+              echo "   This may happen if history was rewritten or is a shallow clone"
+              echo "   Using all commits in develop as potentially new"
+              LAST_SYNC_SHA=""
+            fi
+          fi
+
+          # Determine the range to analyze
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            LOG_RANGE="${LAST_SYNC_SHA}..HEAD"
+          else
+            # No sync point found - analyze all commits in develop
+            LOG_RANGE="HEAD"
+          fi
+
+          echo "📝 Analyzing commits in range: $LOG_RANGE"
+
+          # Get all commits to analyze (oldest first)
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse "$LOG_RANGE" || true)
+          else
+            mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse HEAD || true)
+          fi
+
+          if [ "${#SHAS_IN_RANGE[@]}" -eq 0 ]; then
+            echo "ℹ️ No commits found since last sync with staging"
             {
               echo "promotion_needed=false"
               echo "commit_count=0"
@@ -85,6 +130,13 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          # Build commits list for PR body from SHAs
+          NEW_COMMITS=""
+          for sha in "${SHAS_IN_RANGE[@]}"; do
+            subj="$(git log -n1 --format=%s "$sha")"
+            NEW_COMMITS+="${sha:0:7} ${subj}"$'\n'
+          done
 
           echo "🔎 Check if an open develop→staging PR exists..."
           EXISTING_PR="$(gh pr list --base staging --head develop --state open --json number --jq '.[0].number' || true)"
@@ -105,13 +157,7 @@ jobs:
             echo "🆕 Generated new promotion ID: $PROMOTION_ID"
           fi
 
-          # Build commits list for PR body
-          NEW_COMMITS=""
-          for commit in "${COMMITS[@]}"; do
-            NEW_COMMITS+="${commit}"$'\n'
-          done
-
-          COMMIT_COUNT="${#COMMITS[@]}"
+          COMMIT_COUNT="${#SHAS_IN_RANGE[@]}"
 
           # Group by feature head ref using GitHub API (first associated PR)
           declare -A GROUP_TO_SHAS
@@ -229,6 +275,10 @@ jobs:
 
           echo "📦 Creating temp branch from staging: $TEMP_BRANCH"
           git checkout -B "$TEMP_BRANCH" origin/staging
+
+          echo "👤 Configuring git author for commits"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           echo "🔀 Applying grouped cherry-picks as squash commits"
           GROUPS_DATA='${{ needs.commit-analysis.outputs.groups }}'
