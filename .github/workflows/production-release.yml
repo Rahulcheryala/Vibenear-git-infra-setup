@@ -245,7 +245,7 @@ jobs:
 
           REPO="${GITHUB_REPOSITORY}"
 
-          TITLE="🚀 Production Release: ${{ needs.commit-analysis.outputs.release_tag }}"
+          TITLE="Production Release: ${{ needs.commit-analysis.outputs.release_tag }}"
 
           # Prepare release notes section
           if [ -n "${{ inputs.release_notes }}" ]; then
