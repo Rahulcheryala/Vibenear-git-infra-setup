@@ -111,8 +111,6 @@ jobs:
             LOG_RANGE="HEAD"
           fi
 
-          echo "📝 Analyzing commits in range: $LOG_RANGE"
-
           # Get all commits to analyze (oldest first)
           if [ -n "$LAST_SYNC_SHA" ]; then
             mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse "$LOG_RANGE" || true)
@@ -158,6 +156,7 @@ jobs:
             PROMOTION_ID="staging_$(date +'%d-%m-%Y_%H.%M.%S')"
             echo "🆕 Generated new promotion ID: $PROMOTION_ID"
           fi
+          echo ""
 
           COMMIT_COUNT="${#SHAS_IN_RANGE[@]}"
 
@@ -207,11 +206,13 @@ jobs:
             GROUPED_MD+=$'\n'
           done
 
+          echo "📝 Analyzing commits in range: $LOG_RANGE"
           echo "📊 Analysis Results:"
           echo "  • Commits to promote: $COMMIT_COUNT"
           echo "  • Promotion ID: $PROMOTION_ID"
           echo "  • Timestamp: $TIMESTAMP"
           echo ""
+
           echo "📝 Commits to be promoted to staging (grouped):"
           printf "%s\n" "$GROUPED_MD"
           echo ""
@@ -309,60 +310,63 @@ jobs:
 
           TITLE="Staging Promotion: ${{ needs.commit-analysis.outputs.promotion_id }}"
 
-          BODY_CONTENT="## 🚀 Staging Promotion
+          HEAD_BRANCH="${{ steps.build_temp_branch.outputs.temp_branch }}"
 
-          This PR promotes features from \`develop\` to \`staging\` for testing.
+          echo "📝 Ensuring PR base=staging head=${HEAD_BRANCH}"
 
-          ### 📋 Promotion Information
-          - **Promotion ID**: \`${{ needs.commit-analysis.outputs.promotion_id }}\`
-          - **Timestamp**: ${{ needs.commit-analysis.outputs.timestamp }}
-          - **Commit Count**: ${{ needs.commit-analysis.outputs.commit_count }} commits
-          - **Source**: \`develop\`
-          - **Target**: \`staging\`
-          - **Triggered By**: @${{ github.actor }} via manual workflow dispatch
-
-          ### 🔗 Feature PRs
-          ${{ needs.commit-analysis.outputs.feature_prs_md }}
-
-          ### 📝 Commits to be Deployed
-          ${{ needs.commit-analysis.outputs.grouped_commits_md }}
-
-          ### 🔄 What Happens on Merge
-          1. This PR branch contains one commit per feature group
-          2. Merge with "Create a merge commit" or "Rebase and merge" to preserve grouped commits
-          3. Staging deployment will be triggered
-          4. Changes will be available for testing in staging environment
-
-          ### ✅ Pre-merge Checklist
-          - [ ] Code review complete
-          - [ ] All tests passing on develop
-          - [ ] No breaking changes without migration plan
-          - [ ] Ready for QA testing
-
-          ---
-          🔍 This will deploy to **STAGING** environment for testing.
-
-          👥 Reviewers: @rahulcheryala"
-
-          echo "📝 Ensuring PR base=staging head=${{ steps.build_temp_branch.outputs.temp_branch }}"
+          echo "🧾 Building PR body file"
+          BODY_FILE=body.md
+          {
+            echo "## 🚀 Staging Promotion"
+            echo ""
+            echo "This PR promotes features from \`develop\` to \`staging\` for testing."
+            echo ""
+            echo "### 📋 Promotion Information"
+            echo "- **Promotion ID**: \`${{ needs.commit-analysis.outputs.promotion_id }}\`"
+            echo "- **Timestamp**: ${{ needs.commit-analysis.outputs.timestamp }}"
+            echo "- **Commit Count**: ${{ needs.commit-analysis.outputs.commit_count }} commits"
+            echo "- **Source**: \`develop\`"
+            echo "- **Target**: \`staging\`"
+            echo "- **Triggered By**: @${{ github.actor }} via manual workflow dispatch"
+            echo ""
+            echo "### 🔗 Feature PRs"
+            echo "${{ needs.commit-analysis.outputs.feature_prs_md }}"
+            echo ""
+            echo "### 📝 Commits to be Deployed"
+            echo "${{ needs.commit-analysis.outputs.grouped_commits_md }}"
+            echo ""
+            echo "### 🔄 What Happens on Merge"
+            echo "1. This PR branch contains one commit per feature group"
+            echo "2. Merge with \"Create a merge commit\" or \"Rebase and merge\" to preserve grouped commits"
+            echo "3. Staging deployment will be triggered"
+            echo "4. Changes will be available for testing in staging environment"
+            echo ""
+            echo "### ✅ Pre-merge Checklist"
+            echo "- [ ] Code review complete"
+            echo "- [ ] All tests passing on develop"
+            echo "- [ ] No breaking changes without migration plan"
+            echo "- [ ] Ready for QA testing"
+            echo ""
+            echo "---"
+            echo "🔍 This will deploy to **STAGING** environment for testing."
+            echo ""
+            echo "👥 Reviewers: @rahulcheryala"
+          } > "$BODY_FILE"
 
           echo "🔎 Checking for existing open PR from temp branch → staging..."
-          EXISTING_NUMBER="$(gh pr list --base staging --head "${{ steps.build_temp_branch.outputs.temp_branch }}" --state open --json number --jq '.[0].number' || true)"
+          EXISTING_NUMBER="$(gh pr list --base staging --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number' || true)"
           if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
             PR_NUMBER="$EXISTING_NUMBER"
             echo "🔁 Reusing PR #$PR_NUMBER and updating title/body..."
-            gh api -X PATCH "repos/${REPO}/pulls/${PR_NUMBER}" -f title="$TITLE" -f body="$BODY_CONTENT" >/dev/null
+            gh pr edit "$PR_NUMBER" --title "$TITLE" -F "$BODY_FILE" >/dev/null
           else
-            echo "🆕 Creating PR base=staging head=${{ steps.build_temp_branch.outputs.temp_branch }}..."
-            PR_NUMBER="$(gh api -X POST "repos/${REPO}/pulls" \
-              -f title="$TITLE" \
-              -f head="${{ steps.build_temp_branch.outputs.temp_branch }}" \
-              -f base="staging" \
-              -f body="$BODY_CONTENT" \
-              --jq .number)"
+            echo "🆕 Creating PR base=staging head=$HEAD_BRANCH..."
+            PR_URL_CREATED="$(gh pr create -B staging -H "$HEAD_BRANCH" -t "$TITLE" -F "$BODY_FILE" --json url --jq .url)"
+            # Get number from the created PR
+            PR_NUMBER="$(gh pr view "$PR_URL_CREATED" --json number --jq .number)"
           fi
 
-          PR_URL="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .html_url)"
+          PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
 
           echo "🏷️ Adding labels and requesting reviewers..."
           printf '{"labels":["staging","deployment","promotion","auto-generated"]}\n' > labels.json
