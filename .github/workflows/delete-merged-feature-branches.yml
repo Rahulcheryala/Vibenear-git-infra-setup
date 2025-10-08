@@ -1,0 +1,70 @@
+name: Delete merged feature branches
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - develop
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: delete-merged-branch-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  delete-merged-branch:
+    name: Delete head branch after merge to develop
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Decide whether branch should be deleted
+        id: decide
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          echo "Head branch: $HEAD_REF"
+          echo "Head repo:   $HEAD_REPO"
+          echo "Base repo:   $BASE_REPO"
+
+          # Only delete branches in the same repository (not forks)
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "This PR originated from a fork. Skipping branch deletion."
+            echo "delete_ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Match naming convention: feature/bugfix/hotfix with [a-z0-9_\-]+
+          if [[ "$HEAD_REF" =~ ^(feature|bugfix|hotfix)/[a-z0-9_\-]+$ ]]; then
+            echo "Branch matches convention and is eligible for deletion."
+            echo "delete_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "Branch does not match deletion pattern. Skipping."
+            echo "delete_ref=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Delete branch via GitHub API
+        if: steps.decide.outputs.delete_ref != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF: ${{ steps.decide.outputs.delete_ref }}
+        run: |
+          set -euo pipefail
+
+          # URL-encode slashes for the REST path segment
+          ENC_REF=${REF//\//%2F}
+          echo "Deleting remote branch: $REF (refs/heads/$REF)"
+
+          # Attempt deletion; if already deleted, don't fail the workflow
+          if gh api -X DELETE "repos/${REPO}/git/refs/heads/${ENC_REF}" 2>/dev/null; then
+            echo "✅ Deleted refs/heads/${REF}"
+          else
+            echo "ℹ️ refs/heads/${REF} not found or already deleted; skipping"
+          fi
