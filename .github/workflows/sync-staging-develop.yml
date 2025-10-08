@@ -40,15 +40,15 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          echo "🔄 Ensuring we're on latest develop"
+          echo "🔄 Ensuring we're on latest develop..."
           git checkout develop
           git reset --hard origin-develop
 
-          echo "🔀 Merging staging into develop to update merge-base"
+          echo "🔀 Merging staging into develop..."
           echo "ℹ️  After squash merge to staging, we always sync back to create a clean point"
           git merge -s ours --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER} origin-staging
 
-          echo "⬆️ Pushing develop"
+          echo "⬆️ Pushing develop to remote..."
           git push origin develop
 
           echo "✅ Staging successfully synced to develop!"
