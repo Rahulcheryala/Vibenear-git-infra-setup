@@ -1,0 +1,54 @@
+name: Sync develop after PR merge to staging
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-develop-after-staging-merge
+  cancel-in-progress: false
+
+jobs:
+  merge-staging-into-develop:
+    name: Merge staging into develop after PR merge
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync staging to develop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          echo "🔍 Fetching latest develop and staging..."
+          git fetch origin develop:origin-develop staging:origin-staging
+
+          echo "🔧 Configure git for merge commit..."
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          echo "🔄 Ensuring we're on latest develop..."
+          git checkout develop
+          git reset --hard origin-develop
+
+          echo "🔀 Merging staging into develop..."
+          echo "ℹ️  After squash merge to staging, we always sync back to create a clean point"
+          git merge -s ours --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER} origin-staging
+
+          echo "⬆️ Pushing develop to remote..."
+          git push origin develop
+
+          echo "✅ Staging successfully synced to develop!"

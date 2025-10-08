@@ -46,7 +46,7 @@ jobs:
 
           echo "🔀 Merging main into staging..."
           echo "ℹ️  After squash merge to main, we always sync back to create a clean point"
-          git merge --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER}" origin-main
+          git merge -s ours --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER}" origin-main
 
           echo "⬆️ Pushing staging to remote..."
           git push origin staging
