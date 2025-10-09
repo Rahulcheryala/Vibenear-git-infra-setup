@@ -25,7 +25,7 @@ jobs:
         with:
           ref: develop
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Sync staging to develop
         env:
@@ -47,7 +47,7 @@ jobs:
 
           echo "🔀 Merging staging into develop..."
           echo "ℹ️  After squash merge to staging, we always sync back to create a clean point"
-          git merge -s ours --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER}" origin-staging
+          git merge -s ours --no-ff -m "Sync: Merge staging into develop after PR #${PR_NUMBER}" origin-staging
 
           echo "⬆️ Pushing develop to remote..."
           git push origin develop
@@ -59,7 +59,15 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'staging-promoter'
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Delete promoter branch staging-promoter
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           echo "🧹 Deleting remote branch staging-promoter if present..."
