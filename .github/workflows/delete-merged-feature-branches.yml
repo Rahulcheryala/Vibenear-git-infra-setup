@@ -1,4 +1,5 @@
 name: Delete merged feature branches
+run-name: Deleting feature branches ${{ github.head_ref }}
 
 on:
   pull_request:
