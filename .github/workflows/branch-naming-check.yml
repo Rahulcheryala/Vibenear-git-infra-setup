@@ -1,4 +1,5 @@
 name: Branch Naming Convention Check
+run-name: Branch Name Check for ${{ github.head_ref }}
 
 on:
   pull_request:
