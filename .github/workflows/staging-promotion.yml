@@ -156,7 +156,7 @@ jobs:
             PROMOTION_ID="$EXISTING_ID"
             echo "🔁 Reusing existing PR promotion ID: $PROMOTION_ID"
           else
-            PROMOTION_ID="staging_$(TZ=Asia/Kolkata date +'%d-%m-%Y_%H.%M.%S')"m
+            PROMOTION_ID="staging_$(TZ=Asia/Kolkata date +'%d-%m-%Y_%H.%M.%S')"
             echo "🆕 Generated new promotion ID: $PROMOTION_ID"
           fi
           echo ""
@@ -314,19 +314,42 @@ jobs:
 
           echo "🔀 Applying grouped cherry-picks as squash commits"
           GROUPS_DATA='${{ needs.commit-analysis.outputs.groups }}'
+          COMMITS_CREATED=0
           echo "$GROUPS_DATA" | while IFS='|' read -r group shas; do
             [ -z "$group" ] && continue
             [ -z "$shas" ] && continue
             echo "  • Group: $group"
             echo "    SHAs: $shas"
             echo ""
-            git cherry-pick -n $shas
-            git commit -m "$group"
+
+            # Cherry-pick commits without committing
+            if git cherry-pick -n $shas; then
+              # Check if there are any changes to commit
+              if git diff --cached --quiet; then
+                echo "    ℹ️ No changes introduced (commits already in staging), skipping"
+              else
+                git commit -m "$group"
+                echo "    ✅ Created squash commit for $group"
+                COMMITS_CREATED=$((COMMITS_CREATED + 1))
+              fi
+            else
+              echo "    ⚠️ Cherry-pick failed, aborting"
+              git cherry-pick --abort || true
+              exit 1
+            fi
           done
           echo ""
           echo ""
 
-          echo "🚀 Pushing promoter branch"
+          # Check if promoter branch has any new commits compared to staging
+          COMMITS_AHEAD=$(git rev-list --count origin/staging..HEAD)
+          if [ "$COMMITS_AHEAD" -eq 0 ]; then
+            echo "⚠️ No new commits to promote (all commits already in staging)"
+            echo "ℹ️ Skipping promoter branch push"
+            exit 0
+          fi
+
+          echo "🚀 Pushing promoter branch ($COMMITS_AHEAD new commits)"
           git push -u origin "$TEMP_BRANCH" --force
 
           echo "temp_branch=$TEMP_BRANCH" >> "$GITHUB_OUTPUT"
