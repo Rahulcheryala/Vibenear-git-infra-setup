@@ -153,14 +153,18 @@ jobs:
             exit 0
           fi
 
-          echo "🔎 Check if an open staging→main PR exists and try to reuse its tag..."
-          EXISTING_PR="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' || true)"
+          echo "🔎 Check if an open production PR exists and try to reuse its tag..."
+          # Prefer the current promoter branch; fall back to legacy head=staging
+          EXISTING_PR="$(gh pr list --base main --head production-promoter --state open --json number --jq '.[0].number' || true)"
+          if [ -z "${EXISTING_PR:-}" ] || [ "${EXISTING_PR}" = "null" ]; then
+            EXISTING_PR="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number' || true)"
+          fi
           EXISTING_TAG=""
           if [ -n "${EXISTING_PR:-}" ] && [ "${EXISTING_PR}" != "null" ]; then
             echo "ℹ️ Open PR detected: #$EXISTING_PR"
             PR_TEXT="$(gh pr view "$EXISTING_PR" --json title,body --jq '[.title,.body]|join("\n")' || true)"
-            # Extract existing Release Tag value if present
-            EXISTING_TAG="$(printf "%s" "$PR_TEXT" | sed -nE 's/.*Release Tag[^`]*`([^`]+)`.*/\1/p' | head -n1 || true)"
+            # Extract existing Release Tag value if present (from PR body/title)
+            EXISTING_TAG="$(printf "%s" "$PR_TEXT" | sed -nE 's/.*Release Tag[^`]*`([^`]+)`.*/\1/p;s/.*Production Release[^`]*`([^`]+)`.*/\1/p' | head -n1 || true)"
           fi
 
           TIMESTAMP="$IST_TIMESTAMP"
@@ -168,8 +172,9 @@ jobs:
             RELEASE_TAG="$EXISTING_TAG"
             echo "🔁 Reusing existing PR release tag: $RELEASE_TAG"
           else
-            RELEASE_TAG="release_$(date +'%d-%m-%Y_%H.%M.%S')"
-            echo "🆕 Generated new release tag: $RELEASE_TAG"
+            # Generate release tag using IST (Asia/Kolkata)
+            RELEASE_TAG="release_$(TZ=Asia/Kolkata date +'%d-%m-%Y_%H.%M.%S')"
+            echo "🆕 Generated new release tag (IST): $RELEASE_TAG"
           fi
           echo ""
 
