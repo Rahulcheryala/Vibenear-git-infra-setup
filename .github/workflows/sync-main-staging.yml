@@ -1,4 +1,5 @@
-name: Sync staging after PR merge to main
+name: Sync main and staging
+run-name: Sync staging after PR merge to main
 
 on:
   pull_request:
@@ -53,3 +54,19 @@ jobs:
 
           echo "✅ Main successfully synced to staging!"
           echo "🎯 Staging is now at the same point as main - ready for new development"
+
+  delete-promoter-branch:
+    name: Delete promoter branch after PR merge to main
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'production-promoter'
+    steps:
+      - name: Delete promoter branch staging-promoter
+        run: |
+          set -euo pipefail
+          echo "🧹 Deleting remote branch production-promoter if present..."
+          if git ls-remote --heads origin production-promoter | grep -q 'refs/heads/production-promoter'; then
+            git push origin --delete production-promoter || true
+            echo "✅ Deleted remote branch production-promoter"
+          else
+            echo "ℹ️ Remote branch production-promoter not found; skipping"
+          fi
