@@ -25,14 +25,22 @@ jobs:
         with:
           ref: staging
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Sync main to staging
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+
+          echo "🔍 Verifying token is available..."
+          if [ -z "$GH_TOKEN" ]; then
+            echo "❌ No token available!"
+            exit 1
+          fi
+          echo "✅ Token is configured"
 
           echo "🔍 Fetching latest main and staging branches..."
           git fetch origin main:origin-main staging:origin-staging
@@ -50,7 +58,8 @@ jobs:
           git merge -s ours --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER}" origin-main
 
           echo "⬆️ Pushing staging to remote..."
-          git push origin staging
+          # The token from actions/checkout should already be configured, but let's be explicit
+          git push https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git staging
 
           echo "✅ Main successfully synced to staging!"
           echo "🎯 Staging is now at the same point as main - ready for new development"
