@@ -275,7 +275,7 @@ jobs:
             echo "No SHAs provided; nothing to cherry-pick"
           else
             git cherry-pick -n ${SHAS[*]}
-            git commit -m "Production promotion: apply analyzed commits"
+            git commit -m "Production promotion: squashing feature commits"
           fi
 
           echo "🚀 Pushing promoter branch"
