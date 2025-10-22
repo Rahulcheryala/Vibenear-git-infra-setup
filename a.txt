@@ -10,3 +10,5 @@ graph_check_2
 
 git checking conflict
 conflict analysis 2
+
+checking the rebase for staging branch
