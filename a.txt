@@ -12,3 +12,4 @@ git checking conflict
 conflict analysis 2
 
 checking the rebase for staging branch
+trial commit 2
