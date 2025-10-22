@@ -4,3 +4,9 @@ a3
 
 a4
 a5
+
+graph_check_1
+graph_check_2
+
+git checking conflict
+conflict analysis 2
