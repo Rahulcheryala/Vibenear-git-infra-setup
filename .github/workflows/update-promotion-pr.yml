@@ -281,7 +281,7 @@ jobs:
             # Cherry-pick commits without committing
             if git cherry-pick -n $shas; then
               if ! git diff --cached --quiet; then
-                git commit -m "$group (updated)"
+                git commit -m "$group"
                 echo "    ✅ Added updated commit for $group"
               else
                 echo "    ℹ️ No changes for $group"
@@ -311,7 +311,7 @@ jobs:
                 # Check if conflicts are resolved
                 if ! git status --porcelain | grep -q "^UU\|^AA\|^DD"; then
                   if ! git diff --cached --quiet; then
-                    git commit -m "$group (updated - conflicts resolved)"
+                    git commit -m "$group"
                     echo "    ✅ Added updated commit for $group (conflicts resolved)"
                   else
                     echo "    ℹ️ No changes for $group after conflict resolution"
