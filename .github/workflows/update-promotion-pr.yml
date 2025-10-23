@@ -121,9 +121,11 @@ jobs:
           echo "📊 Found $COMMIT_COUNT new commits to add:"
           echo "$NEW_COMMITS"
 
+          IST_TIMESTAMP="$(TZ=Asia/Kolkata date +'%d/%m/%Y %H:%M:%S %Z')"
+
           # Update PR title and body with new commit count
           CURRENT_TITLE="$(gh pr view $PR_NUMBER --json title --jq '.title')"
-          NEW_TITLE="Staging Promotion: $(echo "$CURRENT_TITLE" | sed 's/Staging Promotion: //' | sed 's/ (.*)//') (Updated: +$COMMIT_COUNT commits)"
+          NEW_TITLE="Staging Promotion: $(echo "$CURRENT_TITLE" | sed 's/Staging Promotion: //' | sed 's/ (.*)//')"
 
           # Build updated PR body
           BODY_FILE=updated_body.md
@@ -134,7 +136,7 @@ jobs:
             echo ""
             echo "### 📋 Promotion Information"
             echo "- **Promotion ID**: \`$(echo "$CURRENT_TITLE" | sed -nE 's/.*Promotion: ([^)]+).*/\1/p')\`"
-            echo "- **Last Updated**: $(date +'%d/%m/%Y %H:%M:%S UTC')"
+            echo "- **Last Updated**: $IST_TIMESTAMP"
             echo "- **Total Commits**: $COMMIT_COUNT commits (updated)"
             echo "- **Source**: \`develop\`"
             echo "- **Target**: \`staging\`"
@@ -189,6 +191,10 @@ jobs:
 
           # Checkout promoter branch
           git checkout -B staging-promoter origin-staging-promoter
+
+          # Configure git for commits
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # Use the same sync point detection logic
           echo "🔍 Finding the last sync point between staging and develop..."
