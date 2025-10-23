@@ -194,7 +194,28 @@ jobs:
           FEATURE_PRS_MD=""
           GROUPS_LINES=""
 
-          mapfile -t GROUP_NAMES < <(printf '%s\n' "${!GROUP_TO_SHAS[@]}" | sort)
+          # Sort groups by the oldest commit date in each group (oldest first)
+          declare -A GROUP_TO_OLDEST_DATE
+          for group in "${!GROUP_TO_SHAS[@]}"; do
+            shas_line="${GROUP_TO_SHAS[$group]}"
+            # Get the oldest commit date for this group
+            oldest_date=""
+            for sha in $shas_line; do
+              commit_date=$(git log -1 --format=%ct "$sha" 2>/dev/null || echo "0")
+              if [ -z "$oldest_date" ] || [ "$commit_date" -lt "$oldest_date" ]; then
+                oldest_date="$commit_date"
+              fi
+            done
+            GROUP_TO_OLDEST_DATE[$group]="$oldest_date"
+          done
+
+          # Sort groups by oldest commit date (oldest first)
+          mapfile -t GROUP_NAMES < <(
+            for group in "${!GROUP_TO_OLDEST_DATE[@]}"; do
+              echo "${GROUP_TO_OLDEST_DATE[$group]} $group"
+            done | sort -n | cut -d' ' -f2-
+          )
+
           for group in "${GROUP_NAMES[@]}"; do
             shas_line="${GROUP_TO_SHAS[$group]}"
             GROUPS_LINES+="$group|$shas_line"$'\n'
