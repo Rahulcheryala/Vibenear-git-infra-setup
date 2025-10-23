@@ -1,0 +1,198 @@
+name: Update Promotion PR on New Commits
+run-name: Update staging promotion PR when new commits added to develop
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - develop
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-and-update-promotion-pr:
+    name: Check and Update Promotion PR
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for existing staging promotion PR
+        id: check_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "🔍 Checking for existing staging promotion PR..."
+          EXISTING_PR="$(gh pr list --base staging --head staging-promoter --state open --json number --jq '.[0].number' || true)"
+
+          if [ -n "${EXISTING_PR:-}" ] && [ "${EXISTING_PR}" != "null" ]; then
+            echo "✅ Found existing promotion PR: #$EXISTING_PR"
+            echo "pr_exists=true" >> "$GITHUB_OUTPUT"
+            echo "pr_number=$EXISTING_PR" >> "$GITHUB_OUTPUT"
+          else
+            echo "ℹ️ No existing promotion PR found"
+            echo "pr_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update promotion PR with new commits
+        if: steps.check_pr.outputs.pr_exists == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.check_pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          echo "🔄 Updating promotion PR #$PR_NUMBER with new commits..."
+
+          # Fetch staging branch for comparison
+          git fetch origin staging:origin-staging
+
+          # Check if there are new commits since last sync
+          if git diff --quiet origin-staging..HEAD; then
+            echo "✅ No new commits to add to promotion PR"
+            exit 0
+          fi
+
+          echo "📝 New commits detected, updating PR..."
+
+          # Get new commits since last staging sync
+          NEW_COMMITS=$(git log origin-staging..HEAD --oneline --no-merges)
+          COMMIT_COUNT=$(echo "$NEW_COMMITS" | wc -l)
+
+          echo "📊 Found $COMMIT_COUNT new commits to add:"
+          echo "$NEW_COMMITS"
+
+          # Update PR title and body with new commit count
+          CURRENT_TITLE="$(gh pr view $PR_NUMBER --json title --jq '.title')"
+          NEW_TITLE="Staging Promotion: $(echo "$CURRENT_TITLE" | sed 's/Staging Promotion: //' | sed 's/ (.*)//') (Updated: +$COMMIT_COUNT commits)"
+
+          # Build updated PR body
+          BODY_FILE=updated_body.md
+          {
+            echo "## 🚀 Staging Promotion (Updated)"
+            echo ""
+            echo "This PR promotes features from \`develop\` to \`staging\` for testing."
+            echo ""
+            echo "### 📋 Promotion Information"
+            echo "- **Promotion ID**: \`$(echo "$CURRENT_TITLE" | sed -nE 's/.*Promotion: ([^)]+).*/\1/p')\`"
+            echo "- **Last Updated**: $(date +'%d/%m/%Y %H:%M:%S UTC')"
+            echo "- **Total Commits**: $COMMIT_COUNT commits (updated)"
+            echo "- **Source**: \`develop\`"
+            echo "- **Target**: \`staging\`"
+            echo "- **Auto-updated**: New commits detected and added"
+            echo ""
+            echo "### 📝 New Commits Added"
+            echo '```'
+            echo "$NEW_COMMITS"
+            echo '```'
+            echo ""
+            echo "### 🔄 What Happens on Merge"
+            echo "1. This PR branch contains one commit per feature group"
+            echo "2. Merge with \"Create a merge commit\" or \"Rebase and merge\" to preserve grouped commits"
+            echo "3. Staging deployment will be triggered"
+            echo "4. Changes will be available for testing in staging environment"
+            echo ""
+            echo "### ✅ Pre-merge Checklist"
+            echo "- [ ] Code review complete"
+            echo "- [ ] All tests passing on develop"
+            echo "- [ ] No breaking changes without migration plan"
+            echo "- [ ] Ready for QA testing"
+            echo ""
+            echo "---"
+            echo "🔍 This will deploy to **STAGING** environment for testing."
+            echo ""
+            echo "👥 Reviewers: @rahulcheryala"
+          } > "$BODY_FILE"
+
+          # Update PR title and body
+          gh pr edit $PR_NUMBER --title "$NEW_TITLE" --body-file "$BODY_FILE"
+
+          echo "✅ Promotion PR #$PR_NUMBER updated successfully"
+          echo "📊 Added $COMMIT_COUNT new commits to the promotion"
+
+      - name: Update promoter branch with new commits
+        if: steps.check_pr.outputs.pr_exists == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "🔄 Updating promoter branch with new commits..."
+
+          # Fetch promoter branch
+          git fetch origin staging-promoter:origin-staging-promoter || true
+
+          # Check if promoter branch exists
+          if ! git show-ref --verify --quiet refs/remotes/origin/staging-promoter; then
+            echo "ℹ️ Promoter branch doesn't exist, skipping update"
+            exit 0
+          fi
+
+          # Checkout promoter branch
+          git checkout -B staging-promoter origin-staging-promoter
+
+          # Get new commits since last staging sync
+          NEW_COMMITS=$(git log origin-staging..develop --oneline --no-merges)
+          if [ -z "$NEW_COMMITS" ]; then
+            echo "ℹ️ No new commits to add to promoter branch"
+            exit 0
+          fi
+
+          echo "📝 Adding new commits to promoter branch..."
+
+          # Group new commits by feature (similar to staging-promotion workflow)
+          declare -A GROUP_TO_SHAS
+          for commit in $(git log origin-staging..develop --format=%H --no-merges); do
+            # Get feature branch name from commit
+            pr_json="$(gh api -H "Accept: application/vnd.github+json" repos/${GITHUB_REPOSITORY}/commits/${commit}/pulls --jq '.[0] | {url: .html_url, head: .head.ref}' 2>/dev/null || true)"
+            group=""
+            if [ -n "$pr_json" ]; then
+              group="$(printf '%s' "$pr_json" | jq -r '.head // empty')"
+            fi
+            if [[ -z "$group" || ! "$group" =~ ^feature/ ]]; then
+              group="misc/ungrouped"
+            fi
+
+            if [ -n "${GROUP_TO_SHAS[$group]:-}" ]; then
+              GROUP_TO_SHAS[$group]="${GROUP_TO_SHAS[$group]} $commit"
+            else
+              GROUP_TO_SHAS[$group]="$commit"
+            fi
+          done
+
+          # Apply new commits to promoter branch
+          for group in "${!GROUP_TO_SHAS[@]}"; do
+            shas="${GROUP_TO_SHAS[$group]}"
+            echo "  • Adding group: $group"
+            echo "    SHAs: $shas"
+
+            # Cherry-pick commits without committing
+            if git cherry-pick -n $shas; then
+              if ! git diff --cached --quiet; then
+                git commit -m "$group (updated)"
+                echo "    ✅ Added updated commit for $group"
+              else
+                echo "    ℹ️ No changes for $group"
+              fi
+            else
+              echo "    ⚠️ Cherry-pick failed for $group"
+              git cherry-pick --abort || true
+            fi
+          done
+
+          # Push updated promoter branch
+          git push origin staging-promoter --force
+
+          echo "✅ Promoter branch updated with new commits"

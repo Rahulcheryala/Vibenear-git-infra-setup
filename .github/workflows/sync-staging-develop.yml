@@ -27,7 +27,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Sync staging to develop
+      - name: Smart sync staging to develop
         env:
           GH_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -53,9 +53,34 @@ jobs:
           git checkout develop
           git reset --hard origin-develop
 
-          echo "🔀 Merging staging into develop..."
-          echo "ℹ️  After squash merge to staging, we always sync back to create a clean point"
-          git merge -s ours --no-ff -m "Sync: Merge staging into develop after PR #${PR_NUMBER}" origin-staging
+          # Smart sync logic: Only sync when staging is ahead of develop
+          echo "🔍 Checking if sync is needed..."
+
+          # Check if staging has commits that develop doesn't have
+          STAGING_AHEAD=$(git rev-list --count HEAD..origin-staging)
+          DEVELOP_AHEAD=$(git rev-list --count origin-staging..HEAD)
+
+          echo "📊 Branch status:"
+          echo "  • Staging ahead of develop: $STAGING_AHEAD commits"
+          echo "  • Develop ahead of staging: $DEVELOP_AHEAD commits"
+
+          if [ "$STAGING_AHEAD" -eq 0 ]; then
+            echo "✅ Staging and develop are in sync - no sync needed!"
+            echo "🎯 This eliminates unnecessary sync commits in develop branch"
+            exit 0
+          fi
+
+          if [ "$DEVELOP_AHEAD" -eq 0 ]; then
+            echo "✅ Fast-forward merge possible - no sync commit needed!"
+            echo "🎯 This eliminates unnecessary sync commits in develop branch"
+            git merge --ff-only origin-staging
+            echo "✅ Fast-forward merge completed"
+          else
+            echo "🔀 Branches have diverged - creating sync commit..."
+            echo "ℹ️  After squash merge to staging, we sync back to create a clean point"
+            echo "⚠️  Note: This will create a sync commit to preserve develop's new commits"
+            git merge -s ours --no-ff -m "Sync: Merge staging into develop after PR #${PR_NUMBER}" origin-staging
+          fi
 
           echo "⬆️ Pushing develop to remote..."
           # The token from actions/checkout should already be configured, but let's be explicit
