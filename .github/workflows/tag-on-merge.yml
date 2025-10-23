@@ -15,7 +15,10 @@ jobs:
     if: >
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
-      github.event.pull_request.head.ref == 'staging'
+      (
+        github.event.pull_request.head.ref == 'staging' ||
+        github.event.pull_request.head.ref == 'production-promoter'
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Determine tag name from PR
@@ -33,7 +36,8 @@ jobs:
           TAG=$(printf "%s" "$TEXT" | sed -nE 's/.*Release Tag[^`]*`([^`]+)`.*/\1/p' | head -n1 || true)
 
           if [ -z "${TAG:-}" ]; then
-            TAG="release_$(date -u +'%d-%m-%Y_%H.%M.%S')"
+            # Fall back to IST-based tag to match promotion workflow
+            TAG="release_$(TZ=Asia/Kolkata date +'%d-%m-%Y_%H.%M.%S')"
             echo "ℹ️ No tag found in PR; generating new: $TAG"
           else
             echo "🔁 Reusing tag from PR: $TAG"

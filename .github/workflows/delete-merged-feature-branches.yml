@@ -1,5 +1,5 @@
-name: Delete merged feature branches
-run-name: Deleting feature branches ${{ github.head_ref }}
+name: Delete merged feature branch
+run-name: Deleting feature branch - ${{ github.head_ref }}
 
 on:
   pull_request:
@@ -53,7 +53,6 @@ jobs:
       - name: Delete branch via GitHub API
         if: steps.decide.outputs.delete_ref != ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           REF: ${{ steps.decide.outputs.delete_ref }}
         run: |
