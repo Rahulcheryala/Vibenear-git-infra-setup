@@ -273,6 +273,11 @@ jobs:
             echo "  • Adding group: $group"
             echo "    SHAs: $shas"
 
+            # Reset any previous cherry-pick state
+            git cherry-pick --abort 2>/dev/null || true
+            git reset --hard HEAD
+            git clean -fd
+
             # Cherry-pick commits without committing
             if git cherry-pick -n $shas; then
               if ! git diff --cached --quiet; then
@@ -282,8 +287,43 @@ jobs:
                 echo "    ℹ️ No changes for $group"
               fi
             else
-              echo "    ⚠️ Cherry-pick failed for $group"
-              git cherry-pick --abort || true
+              echo "    ⚠️ Cherry-pick failed for $group - attempting conflict resolution"
+
+              # Check if there are conflicts
+              if git status --porcelain | grep -q "^UU\|^AA\|^DD"; then
+                echo "    🔧 Resolving conflicts for $group..."
+
+                # Try to resolve conflicts automatically
+                # For modify/delete conflicts, prefer the modified version
+                git status --porcelain | while read status file; do
+                  if [[ "$status" =~ ^UU|^AA|^DD ]]; then
+                    echo "      Resolving conflict in: $file"
+                    if [[ "$status" =~ ^DD ]]; then
+                      # Delete/Delete conflict - remove the file
+                      git rm "$file" 2>/dev/null || true
+                    elif [[ "$status" =~ ^UU|^AA ]]; then
+                      # Modify/Modify or Add/Add conflict - add the file
+                      git add "$file" 2>/dev/null || true
+                    fi
+                  fi
+                done
+
+                # Check if conflicts are resolved
+                if ! git status --porcelain | grep -q "^UU\|^AA\|^DD"; then
+                  if ! git diff --cached --quiet; then
+                    git commit -m "$group (updated - conflicts resolved)"
+                    echo "    ✅ Added updated commit for $group (conflicts resolved)"
+                  else
+                    echo "    ℹ️ No changes for $group after conflict resolution"
+                  fi
+                else
+                  echo "    ❌ Could not resolve conflicts for $group - skipping"
+                  git cherry-pick --abort 2>/dev/null || true
+                fi
+              else
+                echo "    ❌ Cherry-pick failed for $group - skipping"
+                git cherry-pick --abort 2>/dev/null || true
+              fi
             fi
           done
 
