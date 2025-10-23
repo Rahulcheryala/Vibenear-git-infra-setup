@@ -15,6 +15,14 @@ jobs:
           branch_name="${{ github.head_ref }}"
           echo "Checking branch name: $branch_name"
 
+          # Allow system/promoter branches to bypass naming checks
+          case "$branch_name" in
+            staging|staging-promoter|production-promoter)
+              echo "System branch '$branch_name' – skipping naming check"
+              exit 0
+              ;;
+          esac
+
           if [[ $branch_name =~ ^(feature|bugfix|hotfix)/[a-z0-9_\-]+$ ]]; then
             echo "Branch name follows the naming convention: <type>/<branch-name>"
             echo "Branch name is valid: $branch_name"
