@@ -296,16 +296,21 @@ jobs:
           fi
 
       - name: Build promoter branch with grouped squash commits
-        if: steps.check_existing.outputs.exists != 'true'
         id: build_temp_branch
         run: |
           set -euo pipefail
 
           PROMOTION_ID="${{ needs.commit-analysis.outputs.promotion_id }}"
           TEMP_BRANCH="staging-promoter"
+          EXISTING_PR="${{ steps.check_existing.outputs.exists }}"
 
-          echo "📦 Creating promoter branch from staging: $TEMP_BRANCH"
-          git checkout -B "$TEMP_BRANCH" origin/staging
+          if [ "$EXISTING_PR" = "true" ]; then
+            echo "📦 Updating existing promoter branch: $TEMP_BRANCH"
+            git checkout -B "$TEMP_BRANCH" origin/staging-promoter
+          else
+            echo "📦 Creating new promoter branch from staging: $TEMP_BRANCH"
+            git checkout -B "$TEMP_BRANCH" origin/staging
+          fi
           echo ""
 
           echo "👤 Configuring git author for commits"
