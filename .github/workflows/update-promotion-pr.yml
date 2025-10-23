@@ -59,17 +59,64 @@ jobs:
           # Fetch staging branch for comparison
           git fetch origin staging:origin-staging
 
-          # Check if there are new commits since last sync
-          if git diff --quiet origin-staging..HEAD; then
+          echo "🔍 Finding the last sync point between staging and develop..."
+          # Use the same sync point detection logic as staging-promotion.yml
+          LAST_SYNC_SHA=""
+          for commit in $(git rev-list --merges HEAD | head -200); do
+            p1=$(git rev-parse "$commit^1")
+            p2=$(git rev-parse "$commit^2" 2>/dev/null || true)
+            if git merge-base --is-ancestor "$p1" origin/staging || \
+               { [ -n "$p2" ] && git merge-base --is-ancestor "$p2" origin/staging; }; then
+              LAST_SYNC_SHA="$commit"
+              msg=$(git log -1 --format=%s "$commit")
+              echo "ℹ️ Found last staging→develop sync at: ${commit:0:9}"
+              echo "   Subject: $msg"
+              break
+            fi
+          done
+
+          # If no explicit merge found, use git merge-base as fallback
+          if [ -z "$LAST_SYNC_SHA" ]; then
+            echo "🔎 No staging→develop merge commit found"
+            echo "   Trying merge-base between develop and staging..."
+            if LAST_SYNC_SHA=$(git merge-base origin-staging HEAD 2>/dev/null); then
+              echo "ℹ️ Using merge-base as starting point: ${LAST_SYNC_SHA:0:9}"
+            else
+              echo "⚠️  No common ancestor found between develop and staging"
+              echo "   Using all commits in develop as potentially new"
+              LAST_SYNC_SHA=""
+            fi
+          fi
+
+          # Determine the range to analyze
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            LOG_RANGE="${LAST_SYNC_SHA}..HEAD"
+          else
+            # No sync point found - analyze all commits in develop
+            LOG_RANGE="HEAD"
+          fi
+
+          # Get commits since last sync point
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse "$LOG_RANGE" || true)
+          else
+            mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse HEAD || true)
+          fi
+
+          if [ "${#SHAS_IN_RANGE[@]}" -eq 0 ]; then
             echo "✅ No new commits to add to promotion PR"
             exit 0
           fi
 
-          echo "📝 New commits detected, updating PR..."
+          echo "📝 New commits detected since last sync, updating PR..."
 
-          # Get new commits since last staging sync
-          NEW_COMMITS=$(git log origin-staging..HEAD --oneline --no-merges)
-          COMMIT_COUNT=$(echo "$NEW_COMMITS" | wc -l)
+          # Build commits list from SHAs (same format as staging-promotion.yml)
+          NEW_COMMITS=""
+          for sha in "${SHAS_IN_RANGE[@]}"; do
+            subj="$(git log -n1 --format=%s "$sha")"
+            NEW_COMMITS+="${sha:0:7} ${subj}"$'\n'
+          done
+          COMMIT_COUNT="${#SHAS_IN_RANGE[@]}"
 
           echo "📊 Found $COMMIT_COUNT new commits to add:"
           echo "$NEW_COMMITS"
@@ -143,9 +190,51 @@ jobs:
           # Checkout promoter branch
           git checkout -B staging-promoter origin-staging-promoter
 
-          # Get new commits since last staging sync
-          NEW_COMMITS=$(git log origin-staging..develop --oneline --no-merges)
-          if [ -z "$NEW_COMMITS" ]; then
+          # Use the same sync point detection logic
+          echo "🔍 Finding the last sync point between staging and develop..."
+          LAST_SYNC_SHA=""
+          for commit in $(git rev-list --merges develop | head -200); do
+            p1=$(git rev-parse "$commit^1")
+            p2=$(git rev-parse "$commit^2" 2>/dev/null || true)
+            if git merge-base --is-ancestor "$p1" origin/staging || \
+               { [ -n "$p2" ] && git merge-base --is-ancestor "$p2" origin/staging; }; then
+              LAST_SYNC_SHA="$commit"
+              msg=$(git log -1 --format=%s "$commit")
+              echo "ℹ️ Found last staging→develop sync at: ${commit:0:9}"
+              echo "   Subject: $msg"
+              break
+            fi
+          done
+
+          # If no explicit merge found, use git merge-base as fallback
+          if [ -z "$LAST_SYNC_SHA" ]; then
+            echo "🔎 No staging→develop merge commit found"
+            echo "   Trying merge-base between develop and staging..."
+            if LAST_SYNC_SHA=$(git merge-base origin-staging develop 2>/dev/null); then
+              echo "ℹ️ Using merge-base as starting point: ${LAST_SYNC_SHA:0:9}"
+            else
+              echo "⚠️  No common ancestor found between develop and staging"
+              echo "   Using all commits in develop as potentially new"
+              LAST_SYNC_SHA=""
+            fi
+          fi
+
+          # Determine the range to analyze
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            LOG_RANGE="${LAST_SYNC_SHA}..develop"
+          else
+            # No sync point found - analyze all commits in develop
+            LOG_RANGE="develop"
+          fi
+
+          # Get commits since last sync point
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse "$LOG_RANGE" || true)
+          else
+            mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse develop || true)
+          fi
+
+          if [ "${#SHAS_IN_RANGE[@]}" -eq 0 ]; then
             echo "ℹ️ No new commits to add to promoter branch"
             exit 0
           fi
@@ -154,7 +243,7 @@ jobs:
 
           # Group new commits by feature (similar to staging-promotion workflow)
           declare -A GROUP_TO_SHAS
-          for commit in $(git log origin-staging..develop --format=%H --no-merges); do
+          for commit in "${SHAS_IN_RANGE[@]}"; do
             # Get feature branch name from commit
             pr_json="$(gh api -H "Accept: application/vnd.github+json" repos/${GITHUB_REPOSITORY}/commits/${commit}/pulls --jq '.[0] | {url: .html_url, head: .head.ref}' 2>/dev/null || true)"
             group=""
