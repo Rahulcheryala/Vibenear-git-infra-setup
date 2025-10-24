@@ -58,21 +58,6 @@ jobs:
           git fetch origin staging:origin-staging
           echo ""
 
-          echo "🔍 Quick tree diff (develop vs staging)..."
-          if git diff --quiet origin-staging..HEAD; then
-            echo "✅ Develop and staging have identical content"
-            {
-              echo "promotion_needed=false"
-              echo "commit_count=0"
-              echo "promotion_id="
-              echo "timestamp=$IST_TIMESTAMP"
-              echo "existing_pr="
-              echo "new_commits="
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo ""
-
           echo "🔍 Find the last point where staging was merged back into develop..."
           # Strategy: scan recent merge commits on develop; pick the most recent
           # merge whose one parent is reachable from origin/staging.
@@ -168,15 +153,31 @@ jobs:
           declare -A GROUP_TO_PR
 
           for sha in "${SHAS_IN_RANGE[@]}"; do
+            echo "🔍 Analyzing commit: ${sha:0:7}"
             pr_json="$(gh api -H "Accept: application/vnd.github+json" repos/${GITHUB_REPOSITORY}/commits/${sha}/pulls --jq '.[0] | {url: .html_url, head: .head.ref}' 2>/dev/null || true)"
+            echo "   API Response: $pr_json"
             group=""
             pr_url=""
-            if [ -n "$pr_json" ]; then
+            if [ -n "$pr_json" ] && [ "$pr_json" != "null" ]; then
               group="$(printf '%s' "$pr_json" | jq -r '.head // empty')"
               pr_url="$(printf '%s' "$pr_json" | jq -r '.url // empty')"
+              echo "   Detected group: $group"
+              echo "   PR URL: $pr_url"
+            else
+              echo "   No PR found for this commit"
             fi
             if [[ -z "$group" || ! "$group" =~ ^feature/ ]]; then
-              group="misc/ungrouped"
+              # Try to extract branch name from commit message or use commit SHA
+              commit_msg="$(git log -1 --format=%s "$sha")"
+              if [[ "$commit_msg" =~ ^[Ff]eature/ ]]; then
+                # Extract feature name from commit message
+                group="$(echo "$commit_msg" | sed -E 's/^[Ff]eature\/([^[:space:]]+).*/\1/' | tr '[:upper:]' '[:lower:]')"
+                group="feature/$group"
+                echo "   Extracted group from commit message: $group"
+              else
+                group="misc/ungrouped"
+                echo "   Using fallback group: $group"
+              fi
             fi
             if [ -n "${GROUP_TO_SHAS[$group]:-}" ]; then
               GROUP_TO_SHAS[$group]="${GROUP_TO_SHAS[$group]} $sha"
@@ -339,6 +340,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           echo "🔀 Applying grouped cherry-picks as squash commits"
+          echo ""
           GROUPS_DATA='${{ needs.commit-analysis.outputs.groups }}'
           COMMITS_CREATED=0
           echo "$GROUPS_DATA" | while IFS='|' read -r group shas; do
@@ -349,7 +351,6 @@ jobs:
             echo ""
 
             # Sort commits chronologically within the group (oldest first)
-            echo "    📅 Sorting commits chronologically within group..."
             CHRONOLOGICAL_SHAS=""
             for sha in $shas; do
               commit_date=$(git log -1 --format=%ct "$sha" 2>/dev/null || echo "0")
@@ -361,9 +362,6 @@ jobs:
               CHRONOLOGICAL_SHAS="$CHRONOLOGICAL_SHAS $chrono_sha"
             done < /tmp/chrono_shas.txt
 
-            echo "    📋 Chronological order: $CHRONOLOGICAL_SHAS"
-            echo ""
-
             # Cherry-pick commits without committing (in chronological order)
             if git cherry-pick -n $CHRONOLOGICAL_SHAS; then
               # Check if there are any changes to commit
@@ -372,6 +370,7 @@ jobs:
               else
                 git commit -m "$group"
                 echo "    ✅ Created squash commit for $group"
+                echo ""
                 COMMITS_CREATED=$((COMMITS_CREATED + 1))
               fi
             else
