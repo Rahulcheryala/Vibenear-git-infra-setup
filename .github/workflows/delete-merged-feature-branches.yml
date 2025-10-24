@@ -1,5 +1,5 @@
-name: Delete merged feature branches
-run-name: Deleting feature branches ${{ github.head_ref }}
+name: Delete merged feature branch
+run-name: Deleting feature branch - ${{ github.head_ref }}
 
 on:
   pull_request:
@@ -41,14 +41,21 @@ jobs:
             exit 0
           fi
 
-          # Match naming convention: feature/bugfix/hotfix with [a-z0-9_\-]+
-          if [[ "$HEAD_REF" =~ ^(feature|bugfix|hotfix)/[a-z0-9_\-]+$ ]]; then
+          # Match naming convention: feature/bugfix/hotfix with [a-zA-Z0-9_\-]+
+          if [[ "$HEAD_REF" =~ ^(feature|bugfix|hotfix)/[a-zA-Z0-9_\-]+$ ]]; then
             echo "Branch matches convention and is eligible for deletion."
             echo "delete_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
           else
             echo "Branch does not match deletion pattern. Skipping."
             echo "delete_ref=" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Checkout repository for git operations
+        if: steps.decide.outputs.delete_ref != ''
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Delete branch via GitHub API
         if: steps.decide.outputs.delete_ref != ''
@@ -58,14 +65,31 @@ jobs:
           REF: ${{ steps.decide.outputs.delete_ref }}
         run: |
           set -euo pipefail
-
-          # URL-encode slashes for the REST path segment
-          ENC_REF=${REF//\//%2F}
           echo "Deleting remote branch: $REF (refs/heads/$REF)"
+          # First, check if the branch exists
+          echo "🔍 Checking if branch exists..."
+          if ! gh api "repos/${REPO}/branches/${REF}" >/dev/null 2>&1; then
+            echo "ℹ️ Branch $REF does not exist or is already deleted; skipping"
+            exit 0
+          fi
 
-          # Attempt deletion; if already deleted, don't fail the workflow
+          echo "✅ Branch $REF exists, proceeding with deletion..."
+          # Use the correct API endpoint for deleting branches
+          # The correct endpoint is repos/{owner}/{repo}/git/refs/heads/{branch}
+          # For branches with slashes, we need to URL encode the slash
+          ENC_REF=$(printf '%s' "$REF" | sed 's|/|%2F|g')
+
+          echo "🗑️ Attempting to delete branch via API..."
           if gh api -X DELETE "repos/${REPO}/git/refs/heads/${ENC_REF}" 2>/dev/null; then
-            echo "✅ Deleted refs/heads/${REF}"
+            echo "✅ Successfully deleted branch: $REF"
           else
-            echo "ℹ️ refs/heads/${REF} not found or already deleted; skipping"
+            echo "⚠️ Failed to delete branch via API, trying alternative method..."
+            # Alternative method: use git push to delete
+            echo "🔄 Trying git push method..."
+            if git push origin --delete "$REF" 2>/dev/null; then
+              echo "✅ Successfully deleted branch via git push: $REF"
+            else
+              echo "❌ Failed to delete branch $REF - it may be protected or already deleted"
+              echo "ℹ️ This is not a critical error, continuing..."
+            fi
           fi

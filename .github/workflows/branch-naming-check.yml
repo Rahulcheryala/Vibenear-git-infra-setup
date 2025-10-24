@@ -3,41 +3,118 @@ run-name: Branch Name Check for ${{ github.head_ref }}
 
 on:
   pull_request:
-    branches: [develop]
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
 
 jobs:
   check-branch-name:
     runs-on: ubuntu-latest
     steps:
+      - name: Check if PR targets develop
+        id: check_target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get the current base branch from GitHub API (not the context variable)
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          echo "Fetching current PR information from GitHub API..."
+          CURRENT_BASE=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.base.ref')
+
+          if [ "$CURRENT_BASE" = "develop" ]; then
+            echo "should_check=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_check=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check branch name
+        if: steps.check_target.outputs.should_check == 'true'
         run: |
           branch_name="${{ github.head_ref }}"
           echo "Checking branch name: $branch_name"
-
           # Allow system/promoter branches to bypass naming checks
           case "$branch_name" in
             staging|staging-promoter|production-promoter)
-              echo "System branch '$branch_name' – skipping naming check"
+              echo "System branch '$branch_name' - skipping naming check"
               exit 0
               ;;
           esac
 
-          if [[ $branch_name =~ ^(feature|bugfix|hotfix)/[a-z0-9_\-]+$ ]]; then
-            echo "Branch name follows the naming convention: <type>/<branch-name>"
-            echo "Branch name is valid: $branch_name"
+          # Analyze the branch name to provide specific feedback
+          echo "🔍 Analyzing branch name: $branch_name"
+          echo ""
+
+          # Check if branch name follows the correct pattern
+          if [[ $branch_name =~ ^(feature|bugfix|hotfix)/[a-zA-Z0-9_\-]+$ ]]; then
+            echo "✅ Branch name follows the naming convention: <type>/<branch-name>"
+            echo "✅ Branch name is valid: $branch_name"
           else
-            echo "Branch name does not follow the naming convention!"
+            echo "❌ Branch name does not follow the naming convention!"
             echo ""
-            echo "BRANCH NAMING REQUIREMENTS:"
-            echo "  • Must start with 'feature/', 'bugfix/', or 'hotfix/'"
-            echo "  • Must contain only lowercase letters, numbers, underscores, and hyphens"
-            echo "  • Examples:"
-            echo "    - feature/user_authentication"
-            echo "    - bugfix/performance_optimization"
-            echo "    - hotfix/critical_fix"
+
+            # Detailed analysis of what's wrong
+            echo "🔍 DIAGNOSTIC ANALYSIS:"
             echo ""
-            echo "TO FIX YOUR BRANCH NAME:"
+
+            # Check if it starts with correct prefix
+            if [[ ! $branch_name =~ ^(feature|bugfix|hotfix)/ ]]; then
+              echo "❌ ISSUE: Branch name doesn't start with 'feature/', 'bugfix/', or 'hotfix/'"
+              echo "   Current: $branch_name"
+              echo "   Expected: feature/your_branch_name (or bugfix/ or hotfix/)"
+              echo ""
+            fi
+
+            # Check for common problematic characters
+            if [[ $branch_name =~ \. ]]; then
+              echo "❌ ISSUE: Branch name contains dots (.)"
+              echo "   Found: $(echo "$branch_name" | grep -o '\.' | wc -l) dot(s)"
+              echo "   Dots are not allowed in branch names"
+              echo "   Replace dots with underscores or hyphens"
+              echo ""
+            fi
+
+            if [[ $branch_name =~ \  ]]; then
+              echo "❌ ISSUE: Branch name contains spaces"
+              echo "   Spaces are not allowed in branch names"
+              echo "   Replace spaces with underscores or hyphens"
+              echo ""
+            fi
+
+            if [[ $branch_name =~ [^a-zA-Z0-9_\-/] ]]; then
+              echo "❌ ISSUE: Branch name contains special characters"
+              echo "   Special characters like @#$%^&*() are not allowed"
+              echo "   Use only letters, numbers, underscores, and hyphens"
+              echo ""
+            fi
+
+            # Check if it's too long
+            if [ ${#branch_name} -gt 50 ]; then
+              echo "⚠️  WARNING: Branch name is very long (${#branch_name} characters)"
+              echo "   Consider shortening it for better readability"
+              echo ""
+            fi
+
+            # Check for common patterns and suggest fixes
+            echo "💡 SUGGESTED FIXES:"
+            echo ""
+
+            # Suggest based on current branch name
+            if [[ $branch_name =~ ^[^/]+$ ]]; then
+              echo "   Your branch: $branch_name"
+              echo "   Suggested: feature/$(echo "$branch_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-zA-Z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_\|_$//g')"
+            elif [[ $branch_name =~ ^(feature|bugfix|hotfix)/ ]]; then
+              prefix=$(echo "$branch_name" | cut -d'/' -f1)
+              suffix=$(echo "$branch_name" | cut -d'/' -f2-)
+              clean_suffix=$(echo "$suffix" | sed 's/[^a-zA-Z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_\|_$//g')
+              echo "   Your branch: $branch_name"
+              echo "   Suggested: $prefix/$clean_suffix"
+            else
+              echo "   Your branch: $branch_name"
+              echo "   Suggested: feature/$(echo "$branch_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-zA-Z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_\|_$//g')"
+            fi
+
+
+            echo ""
+            echo "🔧 TO FIX YOUR BRANCH NAME:"
             echo "  1. Rename your current branch:"
             echo "     git branch -m $branch_name feature/your_feature_name"
             echo ""
@@ -50,6 +127,15 @@ jobs:
             echo "  4. Update your local branch to track the new remote:"
             echo "     git branch --set-upstream-to=origin/feature/your_feature_name"
             echo ""
-            echo "Replace 'your_feature_name' with a descriptive name for your feature"
+            echo "BRANCH NAMING REQUIREMENTS:"
+            echo "  • Must start with 'feature/', 'bugfix/', or 'hotfix/'"
+            echo "  • Must contain only letters (uppercase and lowercase), numbers, underscores, and hyphens"
+            echo "  • Examples:"
+            echo "    - feature/user_authentication"
+            echo "    - feature/UserAuthentication"
+            echo "    - feature/user-authentication"
+            echo "    - bugfix/performance_optimization"
+            echo "    - bugfix/performance-optimization"
+            echo "    - hotfix/CriticalFix"
             exit 1
           fi
