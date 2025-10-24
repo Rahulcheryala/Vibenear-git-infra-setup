@@ -1,4 +1,5 @@
-name: Sync develop after PR merge to staging
+name: Sync staging and develop
+run-name: Sync develop after PR merge to staging
 
 on:
   pull_request:
@@ -24,14 +25,22 @@ jobs:
         with:
           ref: develop
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Sync staging to develop
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+
+          echo "🔍 Verifying token is available..."
+          if [ -z "$GH_TOKEN" ]; then
+            echo "❌ No token available!"
+            exit 1
+          fi
+          echo "✅ Token is configured"
 
           echo "🔍 Fetching latest develop and staging..."
           git fetch origin develop:origin-develop staging:origin-staging
@@ -46,9 +55,34 @@ jobs:
 
           echo "🔀 Merging staging into develop..."
           echo "ℹ️  After squash merge to staging, we always sync back to create a clean point"
-          git merge -s ours --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER} origin-staging
+          git merge -s ours --no-ff -m "Sync: Merge staging into develop after PR #${PR_NUMBER}" origin-staging
 
           echo "⬆️ Pushing develop to remote..."
-          git push origin develop
+          # The token from actions/checkout should already be configured, but let's be explicit
+          git push https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git develop
 
           echo "✅ Staging successfully synced to develop!"
+
+  delete-promoter-branch:
+    name: Delete promoter branch after PR merge to staging
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'staging-promoter'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete promoter branch staging-promoter
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "🧹 Deleting remote branch staging-promoter if present..."
+          if git ls-remote --heads origin staging-promoter | grep -q 'refs/heads/staging-promoter'; then
+            git push origin --delete staging-promoter || true
+            echo "✅ Deleted remote branch staging-promoter"
+          else
+            echo "ℹ️ Remote branch staging-promoter not found; skipping"
+          fi
