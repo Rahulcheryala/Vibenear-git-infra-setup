@@ -81,7 +81,7 @@ jobs:
               echo ""
             fi
 
-            if [[ $branch_name =~ [@#$%^&*()+=\[\]{}|\\:;\"'<>,?/] ]]; then
+            if [[ $branch_name =~ [^a-zA-Z0-9_\-/] ]]; then
               echo "❌ ISSUE: Branch name contains special characters"
               echo "   Special characters like @#$%^&*() are not allowed"
               echo "   Use only letters, numbers, underscores, and hyphens"
