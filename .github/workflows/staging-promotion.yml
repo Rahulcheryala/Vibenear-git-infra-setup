@@ -354,9 +354,13 @@ jobs:
             for sha in $shas; do
               commit_date=$(git log -1 --format=%ct "$sha" 2>/dev/null || echo "0")
               echo "${commit_date} ${sha}"
-            done | sort -n | cut -d' ' -f2- | while read -r chrono_sha; do
+            done | sort -n | cut -d' ' -f2- > /tmp/chrono_shas.txt
+
+            # Read the sorted SHAs back into the variable
+            while read -r chrono_sha; do
               CHRONOLOGICAL_SHAS="$CHRONOLOGICAL_SHAS $chrono_sha"
-            done
+            done < /tmp/chrono_shas.txt
+
             echo "    📋 Chronological order: $CHRONOLOGICAL_SHAS"
             echo ""
 
