@@ -102,16 +102,16 @@ jobs:
             # Suggest based on current branch name
             if [[ $branch_name =~ ^[^/]+$ ]]; then
               echo "   Your branch: $branch_name"
-              echo "   Suggested: feature/$(echo "$branch_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-zA-Z0-9]/-/g')"
+              echo "   Suggested: feature/$(echo "$branch_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-zA-Z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_\|_$//g')"
             elif [[ $branch_name =~ ^(feature|bugfix|hotfix)/ ]]; then
               prefix=$(echo "$branch_name" | cut -d'/' -f1)
               suffix=$(echo "$branch_name" | cut -d'/' -f2-)
-              clean_suffix=$(echo "$suffix" | sed 's/[^a-zA-Z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+              clean_suffix=$(echo "$suffix" | sed 's/[^a-zA-Z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_\|_$//g')
               echo "   Your branch: $branch_name"
               echo "   Suggested: $prefix/$clean_suffix"
             else
               echo "   Your branch: $branch_name"
-              echo "   Suggested: feature/$(echo "$branch_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-zA-Z0-9]/-/g' | sed 's/--*/-/g')"
+              echo "   Suggested: feature/$(echo "$branch_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-zA-Z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_\|_$//g')"
             fi
 
             echo ""
@@ -134,7 +134,9 @@ jobs:
             echo "  • Examples:"
             echo "    - feature/user_authentication"
             echo "    - feature/UserAuthentication"
+            echo "    - feature/user-authentication"
             echo "    - bugfix/performance_optimization"
+            echo "    - bugfix/performance-optimization"
             echo "    - hotfix/CriticalFix"
             exit 1
           fi
