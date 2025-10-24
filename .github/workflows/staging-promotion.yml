@@ -166,13 +166,23 @@ jobs:
             else
               echo "   No PR found for this commit"
             fi
-            if [[ -z "$group" || ! "$group" =~ ^feature/ ]]; then
+            if [[ -z "$group" || ! "$group" =~ ^(feature|bugfix|hotfix)/ ]]; then
               # Try to extract branch name from commit message or use commit SHA
               commit_msg="$(git log -1 --format=%s "$sha")"
               if [[ "$commit_msg" =~ ^[Ff]eature/ ]]; then
                 # Extract feature name from commit message
                 group="$(echo "$commit_msg" | sed -E 's/^[Ff]eature\/([^[:space:]]+).*/\1/' | tr '[:upper:]' '[:lower:]')"
                 group="feature/$group"
+                echo "   Extracted group from commit message: $group"
+              elif [[ "$commit_msg" =~ ^[Bb]ugfix/ ]]; then
+                # Extract bugfix name from commit message
+                group="$(echo "$commit_msg" | sed -E 's/^[Bb]ugfix\/([^[:space:]]+).*/\1/' | tr '[:upper:]' '[:lower:]')"
+                group="bugfix/$group"
+                echo "   Extracted group from commit message: $group"
+              elif [[ "$commit_msg" =~ ^[Hh]otfix/ ]]; then
+                # Extract hotfix name from commit message
+                group="$(echo "$commit_msg" | sed -E 's/^[Hh]otfix\/([^[:space:]]+).*/\1/' | tr '[:upper:]' '[:lower:]')"
+                group="hotfix/$group"
                 echo "   Extracted group from commit message: $group"
               else
                 group="misc/ungrouped"
