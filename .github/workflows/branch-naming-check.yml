@@ -8,14 +8,36 @@ on:
 jobs:
   check-branch-name:
     runs-on: ubuntu-latest
-    if: github.base_ref == 'develop'
     steps:
+      - name: Debug PR information
+        run: |
+          echo "🔍 Debug Information:"
+          echo "  • Head ref: ${{ github.head_ref }}"
+          echo "  • Base ref: ${{ github.base_ref }}"
+          echo "  • Event name: ${{ github.event_name }}"
+          echo "  • Action: ${{ github.event.action }}"
+          echo "  • PR number: ${{ github.event.pull_request.number }}"
+          echo "  • PR state: ${{ github.event.pull_request.state }}"
+          echo "  • PR draft: ${{ github.event.pull_request.draft }}"
+
+      - name: Check if PR targets develop
+        id: check_target
+        run: |
+          base_branch="${{ github.base_ref }}"
+          echo "Target branch: $base_branch"
+          if [ "$base_branch" = "develop" ]; then
+            echo "✅ PR targets develop branch - proceeding with branch name check"
+            echo "should_check=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ℹ️ PR targets $base_branch branch - skipping branch name check"
+            echo "should_check=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check branch name
+        if: steps.check_target.outputs.should_check == 'true'
         run: |
           branch_name="${{ github.head_ref }}"
-          base_branch="${{ github.base_ref }}"
           echo "Checking branch name: $branch_name"
-          echo "Target branch: $base_branch"
 
           # Allow system/promoter branches to bypass naming checks
           case "$branch_name" in
