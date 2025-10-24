@@ -3,7 +3,7 @@ run-name: Branch Name Check for ${{ github.head_ref }}
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
 
 jobs:
   check-branch-name:
@@ -22,14 +22,24 @@ jobs:
 
       - name: Check if PR targets develop
         id: check_target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          base_branch="${{ github.base_ref }}"
-          echo "Target branch: $base_branch"
-          if [ "$base_branch" = "develop" ]; then
+          # Get the current base branch from GitHub API (not the context variable)
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+
+          echo "Fetching current PR information from GitHub API..."
+          CURRENT_BASE=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.base.ref')
+
+          echo "Context base ref: ${{ github.base_ref }}"
+          echo "Current base ref: $CURRENT_BASE"
+
+          if [ "$CURRENT_BASE" = "develop" ]; then
             echo "✅ PR targets develop branch - proceeding with branch name check"
             echo "should_check=true" >> "$GITHUB_OUTPUT"
           else
-            echo "ℹ️ PR targets $base_branch branch - skipping branch name check"
+            echo "ℹ️ PR targets $CURRENT_BASE branch - skipping branch name check"
             echo "should_check=false" >> "$GITHUB_OUTPUT"
           fi
 
