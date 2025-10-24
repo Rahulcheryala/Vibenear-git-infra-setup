@@ -19,11 +19,13 @@ jobs:
           REPO="${{ github.repository }}"
           echo "Fetching current PR information from GitHub API..."
           CURRENT_BASE=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.base.ref')
+
           if [ "$CURRENT_BASE" = "develop" ]; then
             echo "should_check=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_check=false" >> "$GITHUB_OUTPUT"
           fi
+
       - name: Check branch name
         if: steps.check_target.outputs.should_check == 'true'
         run: |
@@ -36,9 +38,11 @@ jobs:
               exit 0
               ;;
           esac
+
           # Analyze the branch name to provide specific feedback
           echo "🔍 Analyzing branch name: $branch_name"
           echo ""
+
           # Check if branch name follows the correct pattern
           if [[ $branch_name =~ ^(feature|bugfix|hotfix)/[a-zA-Z0-9_\-]+$ ]]; then
             echo "✅ Branch name follows the naming convention: <type>/<branch-name>"
@@ -46,9 +50,11 @@ jobs:
           else
             echo "❌ Branch name does not follow the naming convention!"
             echo ""
+
             # Detailed analysis of what's wrong
             echo "🔍 DIAGNOSTIC ANALYSIS:"
             echo ""
+
             # Check if it starts with correct prefix
             if [[ ! $branch_name =~ ^(feature|bugfix|hotfix)/ ]]; then
               echo "❌ ISSUE: Branch name doesn't start with 'feature/', 'bugfix/', or 'hotfix/'"
@@ -56,6 +62,7 @@ jobs:
               echo "   Expected: feature/your_branch_name (or bugfix/ or hotfix/)"
               echo ""
             fi
+
             # Check for common problematic characters
             if [[ $branch_name =~ \. ]]; then
               echo "❌ ISSUE: Branch name contains dots (.)"
@@ -64,27 +71,32 @@ jobs:
               echo "   Replace dots with underscores or hyphens"
               echo ""
             fi
+
             if [[ $branch_name =~ \  ]]; then
               echo "❌ ISSUE: Branch name contains spaces"
               echo "   Spaces are not allowed in branch names"
               echo "   Replace spaces with underscores or hyphens"
               echo ""
             fi
+
             if [[ $branch_name =~ [^a-zA-Z0-9_\-/] ]]; then
               echo "❌ ISSUE: Branch name contains special characters"
               echo "   Special characters like @#$%^&*() are not allowed"
               echo "   Use only letters, numbers, underscores, and hyphens"
               echo ""
             fi
+
             # Check if it's too long
             if [ ${#branch_name} -gt 50 ]; then
               echo "⚠️  WARNING: Branch name is very long (${#branch_name} characters)"
               echo "   Consider shortening it for better readability"
               echo ""
             fi
+
             # Check for common patterns and suggest fixes
             echo "💡 SUGGESTED FIXES:"
             echo ""
+
             # Suggest based on current branch name
             if [[ $branch_name =~ ^[^/]+$ ]]; then
               echo "   Your branch: $branch_name"
@@ -99,6 +111,8 @@ jobs:
               echo "   Your branch: $branch_name"
               echo "   Suggested: feature/$(echo "$branch_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-zA-Z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_\|_$//g')"
             fi
+
+
             echo ""
             echo "🔧 TO FIX YOUR BRANCH NAME:"
             echo "  1. Rename your current branch:"
