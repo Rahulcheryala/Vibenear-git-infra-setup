@@ -194,7 +194,28 @@ jobs:
           FEATURE_PRS_MD=""
           GROUPS_LINES=""
 
-          mapfile -t GROUP_NAMES < <(printf '%s\n' "${!GROUP_TO_SHAS[@]}" | sort)
+          # Sort groups by the oldest commit date in each group (oldest first)
+          declare -A GROUP_TO_OLDEST_DATE
+          for group in "${!GROUP_TO_SHAS[@]}"; do
+            shas_line="${GROUP_TO_SHAS[$group]}"
+            # Get the oldest commit date for this group
+            oldest_date=""
+            for sha in $shas_line; do
+              commit_date=$(git log -1 --format=%ct "$sha" 2>/dev/null || echo "0")
+              if [ -z "$oldest_date" ] || [ "$commit_date" -lt "$oldest_date" ]; then
+                oldest_date="$commit_date"
+              fi
+            done
+            GROUP_TO_OLDEST_DATE[$group]="$oldest_date"
+          done
+
+          # Sort groups by oldest commit date (oldest first)
+          mapfile -t GROUP_NAMES < <(
+            for group in "${!GROUP_TO_OLDEST_DATE[@]}"; do
+              echo "${GROUP_TO_OLDEST_DATE[$group]} $group"
+            done | sort -n | cut -d' ' -f2-
+          )
+
           for group in "${GROUP_NAMES[@]}"; do
             shas_line="${GROUP_TO_SHAS[$group]}"
             GROUPS_LINES+="$group|$shas_line"$'\n'
@@ -296,16 +317,21 @@ jobs:
           fi
 
       - name: Build promoter branch with grouped squash commits
-        if: steps.check_existing.outputs.exists != 'true'
         id: build_temp_branch
         run: |
           set -euo pipefail
 
           PROMOTION_ID="${{ needs.commit-analysis.outputs.promotion_id }}"
           TEMP_BRANCH="staging-promoter"
+          EXISTING_PR="${{ steps.check_existing.outputs.exists }}"
 
-          echo "📦 Creating promoter branch from staging: $TEMP_BRANCH"
-          git checkout -B "$TEMP_BRANCH" origin/staging
+          if [ "$EXISTING_PR" = "true" ]; then
+            echo "📦 Updating existing promoter branch: $TEMP_BRANCH"
+            git checkout -B "$TEMP_BRANCH" origin/staging-promoter
+          else
+            echo "📦 Creating new promoter branch from staging: $TEMP_BRANCH"
+            git checkout -B "$TEMP_BRANCH" origin/staging
+          fi
           echo ""
 
           echo "👤 Configuring git author for commits"
@@ -322,8 +348,20 @@ jobs:
             echo "    SHAs: $shas"
             echo ""
 
-            # Cherry-pick commits without committing
-            if git cherry-pick -n $shas; then
+            # Sort commits chronologically within the group (oldest first)
+            echo "    📅 Sorting commits chronologically within group..."
+            CHRONOLOGICAL_SHAS=""
+            for sha in $shas; do
+              commit_date=$(git log -1 --format=%ct "$sha" 2>/dev/null || echo "0")
+              echo "${commit_date} ${sha}"
+            done | sort -n | cut -d' ' -f2- | while read -r chrono_sha; do
+              CHRONOLOGICAL_SHAS="$CHRONOLOGICAL_SHAS $chrono_sha"
+            done
+            echo "    📋 Chronological order: $CHRONOLOGICAL_SHAS"
+            echo ""
+
+            # Cherry-pick commits without committing (in chronological order)
+            if git cherry-pick -n $CHRONOLOGICAL_SHAS; then
               # Check if there are any changes to commit
               if git diff --cached --quiet; then
                 echo "    ℹ️ No changes introduced (commits already in staging), skipping"
