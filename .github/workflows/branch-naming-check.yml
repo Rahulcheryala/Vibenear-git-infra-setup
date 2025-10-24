@@ -3,17 +3,19 @@ run-name: Branch Name Check for ${{ github.head_ref }}
 
 on:
   pull_request:
-    branches: [develop]
     types: [opened, synchronize, reopened]
 
 jobs:
   check-branch-name:
     runs-on: ubuntu-latest
+    if: github.base_ref == 'develop'
     steps:
       - name: Check branch name
         run: |
           branch_name="${{ github.head_ref }}"
+          base_branch="${{ github.base_ref }}"
           echo "Checking branch name: $branch_name"
+          echo "Target branch: $base_branch"
 
           # Allow system/promoter branches to bypass naming checks
           case "$branch_name" in
