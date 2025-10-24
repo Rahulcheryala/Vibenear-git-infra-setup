@@ -41,8 +41,8 @@ jobs:
             exit 0
           fi
 
-          # Match naming convention: feature/bugfix/hotfix with [a-z0-9_\-]+
-          if [[ "$HEAD_REF" =~ ^(feature|bugfix|hotfix)/[a-z0-9_\-]+$ ]]; then
+          # Match naming convention: feature/bugfix/hotfix with [a-zA-Z0-9_\-]+
+          if [[ "$HEAD_REF" =~ ^(feature|bugfix|hotfix)/[a-zA-Z0-9_\-]+$ ]]; then
             echo "Branch matches convention and is eligible for deletion."
             echo "delete_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
           else
