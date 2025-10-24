@@ -1,5 +1,4 @@
-name: Sync staging and develop
-run-name: Sync develop after PR merge to staging
+name: Sync develop after PR merge to staging
 
 on:
   pull_request:
@@ -27,19 +26,12 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Smart sync staging to develop
+      - name: Sync staging to develop
         env:
-          GITHUB_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-
-          echo "🔍 Verifying token is available..."
-          if [ -z "$GITHUB_TOKEN" ]; then
-            echo "❌ No token available!"
-            exit 1
-          fi
-          echo "✅ Token is configured"
 
           echo "🔍 Fetching latest develop and staging..."
           git fetch origin develop:origin-develop staging:origin-staging
@@ -52,68 +44,11 @@ jobs:
           git checkout develop
           git reset --hard origin-develop
 
-          # Smart sync logic: Only sync when staging is ahead of develop
-          echo "🔍 Checking if sync is needed..."
-          # Check if staging has commits that develop doesn't have
-          STAGING_AHEAD=$(git rev-list --count HEAD..origin-staging)
-          DEVELOP_AHEAD=$(git rev-list --count origin-staging..HEAD)
-          echo "📊 Branch status:"
-          echo "  • Staging ahead of develop: $STAGING_AHEAD commits"
-          echo "  • Develop ahead of staging: $DEVELOP_AHEAD commits"
-
-          if [ "$STAGING_AHEAD" -eq 0 ]; then
-            echo "✅ Staging and develop are in sync - no sync needed!"
-            echo "🎯 This eliminates unnecessary sync commits in develop branch"
-            exit 0
-          fi
-
-          if [ "$DEVELOP_AHEAD" -eq 0 ]; then
-            echo "✅ Fast-forward merge possible - no sync commit needed!"
-            echo "🎯 This eliminates unnecessary sync commits in develop branch"
-            git merge --ff-only origin-staging
-            echo "✅ Fast-forward merge completed"
-          else
-            echo "🔀 Branches have diverged - creating empty sync commit..."
-            echo "ℹ️  Creating empty commit to record staging SHA without merge history"
-            echo "📝 This prevents GitHub from expanding staging commits in develop PRs"
-
-            # Get the current staging SHA
-            STAGING_SHA=$(git rev-parse origin-staging)
-            echo "📋 Staging SHA: ${STAGING_SHA:0:7}"
-
-            # Create empty commit with staging SHA in message
-            git commit --allow-empty -m "Sync: staging@${STAGING_SHA:0:7} after PR #${PR_NUMBER}
-
-            # This empty commit marks the sync point between develop and staging.
-            echo "Develop remains at: $(git rev-parse HEAD)"
-            echo "✅ Empty sync commit created"
-          fi
+          echo "🔀 Merging staging into develop..."
+          echo "ℹ️  After squash merge to staging, we always sync back to create a clean point"
+          git merge -s ours --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER} origin-staging
 
           echo "⬆️ Pushing develop to remote..."
-          # The token from actions/checkout should already be configured, but let's be explicit
-          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git develop
+          git push origin develop
+
           echo "✅ Staging successfully synced to develop!"
-
-  delete-promoter-branch:
-    name: Delete promoter branch after PR merge to staging
-    runs-on: ubuntu-latest
-    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'staging-promoter'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Delete promoter branch staging-promoter
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          echo "🧹 Deleting remote branch staging-promoter if present..."
-          if git ls-remote --heads origin staging-promoter | grep -q 'refs/heads/staging-promoter'; then
-            git push origin --delete staging-promoter || true
-            echo "✅ Deleted remote branch staging-promoter"
-          else
-            echo "ℹ️ Remote branch staging-promoter not found; skipping"
-          fi
