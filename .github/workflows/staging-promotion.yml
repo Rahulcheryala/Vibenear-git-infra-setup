@@ -58,28 +58,28 @@ jobs:
           git fetch origin staging:origin-staging
           echo ""
 
-          echo "🔍 Find the last point where staging was merged back into develop..."
-          # Strategy: scan recent merge commits on develop; pick the most recent
-          # merge whose one parent is reachable from origin/staging.
+          echo "🔍 Find the last point where staging was synced back into develop..."
+          # Strategy: scan recent commits on develop for empty sync commits with "Sync: staging@" pattern
+          # These are single-parent empty commits that mark sync points
           LAST_SYNC_SHA=""
-          for commit in $(git rev-list --merges HEAD | head -200); do
-            p1=$(git rev-parse "$commit^1")
-            p2=$(git rev-parse "$commit^2" 2>/dev/null || true)
-            if git merge-base --is-ancestor "$p1" origin/staging || \
-               { [ -n "$p2" ] && git merge-base --is-ancestor "$p2" origin/staging; }; then
-              LAST_SYNC_SHA="$commit"
-              msg=$(git log -1 --format=%s "$commit")
-              echo "ℹ️ Found last staging→develop sync at: ${commit:0:9}"
-              echo "   Parents: ${p1:0:9} ${p2:0:9}"
-              echo "   Subject: $msg"
-              break
+          for commit in $(git rev-list HEAD | head -200); do
+            # Check if this is an empty commit with sync message pattern
+            if git show --format="%s" -s "$commit" | grep -q "^Sync: staging@"; then
+              # Verify it's an empty commit (no changes)
+              if git show --stat "$commit" | grep -q "0 files changed"; then
+                LAST_SYNC_SHA="$commit"
+                msg=$(git log -1 --format=%s "$commit")
+                echo "ℹ️ Found last staging→develop sync at: ${commit:0:9}"
+                echo "   Subject: $msg"
+                break
+              fi
             fi
           done
           echo ""
 
-          # If no explicit merge found, use git merge-base as fallback
+          # If no explicit sync commit found, use git merge-base as fallback
           if [ -z "$LAST_SYNC_SHA" ]; then
-            echo "🔎 No staging→develop merge commit found"
+            echo "🔎 No staging→develop sync commit found"
             echo "   Trying merge-base between develop and staging..."
             if LAST_SYNC_SHA=$(git merge-base origin-staging HEAD 2>/dev/null); then
               echo "ℹ️ Using merge-base as starting point: ${LAST_SYNC_SHA:0:9}"
@@ -100,11 +100,22 @@ jobs:
           fi
 
           # Get all commits to analyze (oldest first)
+          # Exclude empty sync commits from the analysis
           if [ -n "$LAST_SYNC_SHA" ]; then
             mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse "$LOG_RANGE" || true)
           else
             mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse HEAD || true)
           fi
+
+          # Filter out empty sync commits from the analysis
+          FILTERED_SHAS=()
+          for sha in "${SHAS_IN_RANGE[@]}"; do
+            # Skip empty sync commits
+            if ! git show --format="%s" -s "$sha" | grep -q "^Sync: staging@"; then
+              FILTERED_SHAS+=("$sha")
+            fi
+          done
+          SHAS_IN_RANGE=("${FILTERED_SHAS[@]}")
 
           if [ "${#SHAS_IN_RANGE[@]}" -eq 0 ]; then
             echo "ℹ️ No commits found since last sync with staging"
@@ -222,6 +233,11 @@ jobs:
           echo "  • Commits to promote: $COMMIT_COUNT"
           echo "  • Promotion ID: $PROMOTION_ID"
           echo "  • Timestamp: $TIMESTAMP"
+          if [ -n "$LAST_SYNC_SHA" ]; then
+            echo "  • Last sync point: ${LAST_SYNC_SHA:0:9} (empty commit strategy)"
+          else
+            echo "  • Last sync point: None found (using merge-base fallback)"
+          fi
           echo ""
 
           echo "📝 Commits to be promoted to staging (grouped):"
