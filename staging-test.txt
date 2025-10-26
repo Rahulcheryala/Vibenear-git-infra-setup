@@ -1,9 +1,9 @@
-user: guest
+Removed the lines added by earlier commits
 
-Checking if the sync commit is working
+Checking if the sync commit is working -- yes it is working fine
 Staging promotion is working, checking the sync point creation
 Bypass token added for sync commit onto develop branch
 Test commit to check if PR template is working or not
 PR template added to main and removing from develop
 
-Removed this line for auth login in user app
+Removed other lines hahaha
