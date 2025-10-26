@@ -32,6 +32,9 @@ jobs:
       new_commits: ${{ steps.analyze.outputs.new_commits }}
       existing_pr: ${{ steps.analyze.outputs.existing_pr }}
       shas: ${{ steps.analyze.outputs.shas }}
+      groups: ${{ steps.analyze.outputs.groups }}
+      grouped_commits_md: ${{ steps.analyze.outputs.grouped_commits_md }}
+      promotion_prs_md: ${{ steps.analyze.outputs.promotion_prs_md }}
 
     steps:
       - name: Checkout staging
@@ -61,40 +64,28 @@ jobs:
           git fetch origin main:origin-main --tags
           echo ""
 
-          echo "🔍 Quick tree diff (staging vs main)..."
-          if git diff --quiet origin-main..HEAD; then
-            echo "✅ Staging and main have identical content"
-            {
-              echo "promotion_needed=false"
-              echo "commit_count=0"
-              echo "release_tag="
-              echo "timestamp=$IST_TIMESTAMP"
-              echo "existing_pr="
-              echo "new_commits="
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo ""
-
-          echo "🔍 Find the last point where main was merged back into staging..."
-          # Look for merge commits in staging where main was brought in
-          # These commits mark synchronization points after a promotion
+          echo "🔍 Find the last point where main was synced back into staging..."
+          # Strategy: scan recent commits on staging for empty sync commits with "Sync: main@" pattern
+          # These are single-parent empty commits that mark sync points
           LAST_SYNC_SHA=""
-          for commit in $(git log HEAD --merges --format=%H | head -50); do
-            # Check if commit message indicates main was merged into staging
-            msg=$(git log -1 --format=%s "$commit")
-            if echo "$msg" | grep -qi "merge.*main"; then
-              LAST_SYNC_SHA="$commit"
-              echo "ℹ️ Found last main→staging sync at: ${commit:0:9}"
-              echo "   Commit: $msg"
-              break
+          for commit in $(git rev-list HEAD | head -200); do
+            # Check if this is an empty commit with sync message pattern
+            if git show --format="%s" -s "$commit" | grep -q "^Sync: main@"; then
+              # Verify it's an empty commit (no file changes)
+              if [ -z "$(git diff-tree --no-commit-id --name-only -r "$commit")" ]; then
+                LAST_SYNC_SHA="$commit"
+                msg=$(git log -1 --format=%s "$commit")
+                echo "ℹ️ Found last main→staging sync at: ${commit:0:9}"
+                echo "   Subject: $msg"
+                break
+              fi
             fi
           done
           echo ""
 
-          # If no explicit merge found, use git merge-base as fallback
+          # If no explicit sync commit found, use git merge-base as fallback
           if [ -z "$LAST_SYNC_SHA" ]; then
-            echo "🔎 No main→staging merge commit found"
+            echo "🔎 No main→staging sync commit found"
             echo "   Trying merge-base between staging and main..."
             if LAST_SYNC_SHA=$(git merge-base origin-main HEAD 2>/dev/null); then
               echo "ℹ️ Using merge-base as starting point: ${LAST_SYNC_SHA:0:9}"
@@ -116,12 +107,22 @@ jobs:
 
           echo "📝 Analyzing commits in range: $LOG_RANGE"
 
-          # Get all commits to analyze
+          # Get all commits to analyze (oldest first)
           if [ -n "$LAST_SYNC_SHA" ]; then
             mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse "$LOG_RANGE" || true)
           else
             mapfile -t SHAS_IN_RANGE < <(git rev-list --no-merges --reverse HEAD || true)
           fi
+
+          # Filter out empty sync commits from the analysis
+          FILTERED_SHAS=()
+          for sha in "${SHAS_IN_RANGE[@]}"; do
+            # Skip empty sync commits
+            if ! git show --format="%s" -s "$sha" | grep -q "^Sync: main@"; then
+              FILTERED_SHAS+=("$sha")
+            fi
+          done
+          SHAS_IN_RANGE=("${FILTERED_SHAS[@]}")
 
           if [ "${#SHAS_IN_RANGE[@]}" -eq 0 ]; then
             echo "ℹ️ No commits found since last sync with main"
@@ -136,22 +137,47 @@ jobs:
             exit 0
           fi
 
-          echo "📊 Analysis Results:"
-          echo "  • Commits since last main→staging sync: ${#SHAS_IN_RANGE[@]}"
-          echo ""
+          COMMIT_COUNT="${#SHAS_IN_RANGE[@]}"
 
-          if [ "${#SHAS_IN_RANGE[@]}" -eq 0 ]; then
-            echo "✅ No new content to promote (all changes already in main)"
-            {
-              echo "promotion_needed=false"
-              echo "commit_count=0"
-              echo "release_tag="
-              echo "timestamp=$(date +'%d/%m/%Y %H:%M:%S %z')"
-              echo "existing_pr="
-              echo "new_commits="
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          # Group by staging promotion (merge commits from staging-promoter to staging)
+          declare -A GROUP_TO_SHAS
+          declare -A GROUP_TO_PR
+
+          echo "🔍 Grouping commits by staging promotion..."
+
+          for sha in "${SHAS_IN_RANGE[@]}"; do
+            # Find the staging promotion merge commit that contains this commit
+            # Look for merge commits in staging that include this SHA
+            group="misc/ungrouped"
+
+            # Search for merge commits in the range that could be staging promotions
+            for merge_commit in $(git rev-list --merges "$LOG_RANGE" 2>/dev/null || true); do
+              # Check if this SHA is reachable from the merge commit
+              if git merge-base --is-ancestor "$sha" "$merge_commit" 2>/dev/null; then
+                # Check if this is a staging promotion commit
+                merge_msg=$(git log -1 --format=%s "$merge_commit")
+                if echo "$merge_msg" | grep -qiE "staging.*promotion"; then
+                  group="$merge_commit"
+                  # Try to get PR link for this staging promotion
+                  pr_json="$(gh api -H "Accept: application/vnd.github+json" repos/${GITHUB_REPOSITORY}/commits/${merge_commit}/pulls --jq '.[0] | {url: .html_url}' 2>/dev/null || true)"
+                  if [ -n "$pr_json" ] && [ "$pr_json" != "null" ]; then
+                    pr_url="$(printf '%s' "$pr_json" | jq -r '.url // empty')"
+                    if [ -n "$pr_url" ] && [ -z "${GROUP_TO_PR[$group]:-}" ]; then
+                      GROUP_TO_PR[$group]="$pr_url"
+                    fi
+                  fi
+                  break
+                fi
+              fi
+            done
+
+            if [ -n "${GROUP_TO_SHAS[$group]:-}" ]; then
+              GROUP_TO_SHAS[$group]="${GROUP_TO_SHAS[$group]} $sha"
+            else
+              GROUP_TO_SHAS[$group]="$sha"
+            fi
+          done
+          echo ""
 
           echo "🔎 Check if an open production PR exists and try to reuse its tag..."
           # Prefer the current promoter branch; fall back to legacy head=staging
@@ -178,22 +204,72 @@ jobs:
           fi
           echo ""
 
-          # Build human-readable list for PR body and the SHAs to pick (oldest first preserved)
+          # Build markdown fragments without top-level headers
+          GROUPED_MD=""
+          PROMOTION_PRS_MD=""
+          GROUPS_LINES=""
+
+          # Sort groups by the oldest commit date in each group (oldest first)
+          declare -A GROUP_TO_OLDEST_DATE
+          for group in "${!GROUP_TO_SHAS[@]}"; do
+            shas_line="${GROUP_TO_SHAS[$group]}"
+            # Get the oldest commit date for this group
+            oldest_date=""
+            for sha in $shas_line; do
+              commit_date=$(git log -1 --format=%ct "$sha" 2>/dev/null || echo "0")
+              if [ -z "$oldest_date" ] || [ "$commit_date" -lt "$oldest_date" ]; then
+                oldest_date="$commit_date"
+              fi
+            done
+            GROUP_TO_OLDEST_DATE[$group]="$oldest_date"
+          done
+
+          # Sort groups by oldest commit date (oldest first)
+          mapfile -t GROUP_NAMES < <(
+            for group in "${!GROUP_TO_OLDEST_DATE[@]}"; do
+              echo "${GROUP_TO_OLDEST_DATE[$group]} $group"
+            done | sort -n | cut -d' ' -f2-
+          )
+
+          for group in "${GROUP_NAMES[@]}"; do
+            shas_line="${GROUP_TO_SHAS[$group]}"
+            GROUPS_LINES+="$group|$shas_line"$'\n'
+
+            # Get group title
+            if [ "$group" = "misc/ungrouped" ]; then
+              GROUPED_MD+="#### misc/ungrouped"$'\n'
+            else
+              group_title=$(git log -1 --format=%s "$group")
+              GROUPED_MD+="#### $group_title"$'\n'
+            fi
+
+            pr_link="${GROUP_TO_PR[$group]:-}"
+            if [ -n "$pr_link" ]; then
+              PROMOTION_PRS_MD+="- $group_title: $pr_link"$'\n'
+              GROUPED_MD+="PR: $pr_link"$'\n'
+            fi
+            for s in $shas_line; do
+              subj="$(git log -n1 --format=%s "$s")"
+              GROUPED_MD+="- ${s:0:7} ${subj}"$'\n'
+            done
+            GROUPED_MD+=$'\n'
+          done
+
+          # Build human-readable list for PR body
           NEW_COMMITS=""
           for sha in "${SHAS_IN_RANGE[@]}"; do
             subj="$(git log -n1 --format=%s "$sha")"
             NEW_COMMITS+="${sha:0:7} -> ${subj}"$'\n'
           done
 
-          COMMIT_COUNT="${#SHAS_IN_RANGE[@]}"
-
           echo "📊 Analysis Results:"
           echo "  • Commits to promote: $COMMIT_COUNT"
+          echo "  • Staging promotions: ${#GROUP_NAMES[@]}"
           echo "  • Release tag: $RELEASE_TAG"
           echo "  • Timestamp: $TIMESTAMP"
           echo ""
-          echo "📝 Commits to be promoted to production:"
-          printf "%s" "$NEW_COMMITS"
+          echo "📝 Commits grouped by staging promotion:"
+          printf "%s\n" "$GROUPED_MD"
           echo ""
 
           {
@@ -211,6 +287,21 @@ jobs:
           {
             echo "shas<<EOF"
             printf "%s\n" "${SHAS_IN_RANGE[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "groups<<EOF"
+            printf "%s\n" "$GROUPS_LINES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "grouped_commits_md<<EOF"
+            printf "%s\n" "$GROUPED_MD"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "promotion_prs_md<<EOF"
+            printf "%s\n" "$PROMOTION_PRS_MD"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -255,31 +346,119 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build promoter branch with exact cherry-picks
-        if: steps.check_existing.outputs.exists != 'true'
+      - name: Build promoter branch with grouped squash commits
         id: build_promoter
         run: |
           set -euo pipefail
 
-          HEAD_BRANCH="production-promoter"
-          echo "📦 Creating promoter branch from main: $HEAD_BRANCH"
-          git checkout -B "$HEAD_BRANCH" origin/main
+          PROMOTION_TAG="${{ needs.commit-analysis.outputs.release_tag }}"
+          TEMP_BRANCH="production-promoter"
+          EXISTING_PR="${{ steps.check_existing.outputs.exists }}"
+
+          if [ "$EXISTING_PR" = "true" ]; then
+            echo "📦 Updating existing promoter branch: $TEMP_BRANCH"
+            git checkout -B "$TEMP_BRANCH" origin/production-promoter
+          else
+            echo "📦 Creating new promoter branch from main: $TEMP_BRANCH"
+            git checkout -B "$TEMP_BRANCH" origin/main
+          fi
+          echo ""
 
           echo "👤 Configuring git author for commits"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          echo "🔀 Cherry-picking exact analyzed SHAs in order"
-          mapfile -t SHAS < <(printf "%s\n" "${{ needs.commit-analysis.outputs.shas }}" | sed '/^$/d')
-          if [ "${#SHAS[@]}" -eq 0 ]; then
-            echo "No SHAs provided; nothing to cherry-pick"
-          else
-            git cherry-pick -n ${SHAS[*]}
-            git commit -m "Production promotion: apply analyzed commits"
+          echo "🔀 Applying grouped cherry-picks as squash commits"
+          echo ""
+
+          # If updating existing PR, get list of existing squash commits
+          if [ "$EXISTING_PR" = "true" ]; then
+            echo "📋 Checking existing squash commits in promoter branch..."
+            EXISTING_GROUPS=$(git log origin/main..HEAD --format=%s)
+            echo "   Existing groups:"
+            echo "$EXISTING_GROUPS" | sed 's/^/   - /'
+            echo ""
           fi
 
-          echo "🚀 Pushing promoter branch"
-          git push -u origin "$HEAD_BRANCH" --force
+          GROUPS_DATA='${{ needs.commit-analysis.outputs.groups }}'
+          COMMITS_CREATED=0
+          echo "$GROUPS_DATA" | while IFS='|' read -r group shas; do
+            [ -z "$group" ] && continue
+            [ -z "$shas" ] && continue
+            echo "  • Group: $group"
+            echo "    SHAs: $shas"
+
+            # Check if this group already exists as a squash commit
+            if [ "$EXISTING_PR" = "true" ]; then
+              # For merge commits, check by commit message pattern
+              if [ "$group" != "misc/ungrouped" ]; then
+                group_title=$(git log -1 --format=%s "$group")
+                if echo "$EXISTING_GROUPS" | grep -qF "$group_title"; then
+                  echo "    ℹ️ Group already exists in promoter branch, skipping"
+                  echo ""
+                  continue
+                fi
+              else
+                if echo "$EXISTING_GROUPS" | grep -q "^misc/ungrouped$"; then
+                  echo "    ℹ️ Group already exists in promoter branch, skipping"
+                  echo ""
+                  continue
+                fi
+              fi
+            fi
+            echo ""
+
+            # Sort commits chronologically within the group (oldest first)
+            CHRONOLOGICAL_SHAS=""
+            for sha in $shas; do
+              commit_date=$(git log -1 --format=%ct "$sha" 2>/dev/null || echo "0")
+              echo "${commit_date} ${sha}"
+            done | sort -n | cut -d' ' -f2- > /tmp/chrono_shas.txt
+
+            # Read the sorted SHAs back into the variable
+            while read -r chrono_sha; do
+              CHRONOLOGICAL_SHAS="$CHRONOLOGICAL_SHAS $chrono_sha"
+            done < /tmp/chrono_shas.txt
+
+            # Determine commit message for this group
+            if [ "$group" = "misc/ungrouped" ]; then
+              COMMIT_MSG="misc/ungrouped"
+            else
+              COMMIT_MSG=$(git log -1 --format=%s "$group")
+            fi
+
+            # Cherry-pick commits without committing (in chronological order)
+            if git cherry-pick -n $CHRONOLOGICAL_SHAS; then
+              # Check if there are any changes to commit
+              if git diff --cached --quiet; then
+                echo "    ℹ️ No changes introduced (commits already in main), skipping"
+              else
+                git commit -m "$COMMIT_MSG"
+                echo "✅ Created squash commit for $COMMIT_MSG"
+                echo ""
+                COMMITS_CREATED=$((COMMITS_CREATED + 1))
+              fi
+            else
+              echo "⚠️ Cherry-pick failed, aborting"
+              git cherry-pick --abort || true
+              exit 1
+            fi
+          done
+          echo ""
+          echo ""
+
+          # Check if promoter branch has any new commits compared to main
+          COMMITS_AHEAD=$(git rev-list --count origin/main..HEAD)
+          if [ "$COMMITS_AHEAD" -eq 0 ]; then
+            echo "⚠️ No new commits to promote (all commits already in main)"
+            echo "ℹ️ Skipping promoter branch push"
+            exit 0
+          fi
+
+          echo "🚀 Pushing promoter branch ($COMMITS_AHEAD new commits)"
+          git push -u origin "$TEMP_BRANCH" --force
+
+          echo "temp_branch=$TEMP_BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Create or reuse PR from promoter branch to main
         id: create_pr
@@ -305,58 +484,73 @@ jobs:
 
           HEAD_BRANCH="production-promoter"
 
-          BODY_CONTENT="## 🚀 Production Deployment
+          echo "🧾 Building PR body file"
+          BODY_FILE=body.md
+          {
+            echo "## 🚀 Production Deployment"
+            echo ""
+            echo "This PR promotes the staging environment to production."
+            echo ""
+            echo "### 📋 Release Information"
+            echo "- **Release Tag**: \`${{ needs.commit-analysis.outputs.release_tag }}\`"
+            echo "- **Timestamp**: ${{ needs.commit-analysis.outputs.timestamp }}"
+            echo "- **Commit Count**: ${{ needs.commit-analysis.outputs.commit_count }} commits"
+            echo "- **Source**: \`staging\`"
+            echo "- **Target**: \`main\`"
+            echo "- **Triggered By**: @${{ github.actor }} via manual workflow dispatch"
+            echo ""
 
-          This PR promotes the staging environment to production.
+            if [ -n "${{ needs.commit-analysis.outputs.promotion_prs_md }}" ]; then
+              echo "### 🔗 Staging Promotion PRs"
+              echo "${{ needs.commit-analysis.outputs.promotion_prs_md }}"
+              echo ""
+            fi
 
-          ### 📋 Release Information
-          - **Release Tag**: \`${{ needs.commit-analysis.outputs.release_tag }}\`
-          - **Timestamp**: ${{ needs.commit-analysis.outputs.timestamp }}
-          - **Commit Count**: ${{ needs.commit-analysis.outputs.commit_count }} commits
-          - **Source**: \`staging\`
-          - **Target**: \`main\`
-          - **Triggered By**: @${{ github.actor }} via manual workflow dispatch
+            echo "### 📦 Features to be Deployed"
+            echo "\`\`\`"
+            echo "${{ needs.commit-analysis.outputs.grouped_commits_md }}" | sed 's/^####//' | sed 's/^PR:/  PR:/'
+            echo "\`\`\`"
+            echo ""
 
-          ### 📝 Features to be Deployed
-          \`\`\`text
-          ${{ needs.commit-analysis.outputs.new_commits }}
-          \`\`\`
+            echo "$RELEASE_NOTES_SECTION"
+            echo ""
 
-          ${RELEASE_NOTES_SECTION}
+            echo "### 🔄 What Happens on Merge"
+            echo "1. This PR branch contains one commit per staging promotion"
+            echo "2. Merge with \"Create a merge commit\" or \"Rebase and merge\" to preserve grouped commits"
+            echo "3. Tag \`${{ needs.commit-analysis.outputs.release_tag }}\` will be created (by post-merge workflow)"
+            echo "4. Production deployment triggered"
+            echo "5. Clean history: one commit per staging promotion"
+            echo ""
 
-          ### 🔄 What Happens on Merge
-          1. This PR uses a fixed promoter branch \`production-promoter\`
-          2. Use GitHub's \"Squash and merge\" to produce a single release commit
-          3. Tag \`${{ needs.commit-analysis.outputs.release_tag }}\` will be created (by post-merge workflow)
-          4. Production deployment triggered
-          5. Clean history: one commit per production release
-
-          ### ✅ Pre-deployment Checklist
-          - [ ] Staging tests passed
-          - [ ] Code review complete
-          - [ ] DB migrations verified
-          - [ ] Release notes reviewed
-
-          ---
-          🔒 Requires multiple approvals.
-
-          👥 Reviewers: @rahulcheryala @your-senior-dev"
+            echo "### ✅ Pre-deployment Checklist"
+            echo "- [ ] Staging tests passed"
+            echo "- [ ] Code review complete"
+            echo "- [ ] DB migrations verified"
+            echo "- [ ] Release notes reviewed"
+            echo ""
+            echo "---"
+            echo "🔒 Requires multiple approvals."
+            echo ""
+            echo "👥 Reviewers: @rahulcheryala @your-senior-dev"
+          } > "$BODY_FILE"
 
           echo "📝 Ensuring PR base=main head=${HEAD_BRANCH}"
 
           echo "🔎 Checking for existing open PR from promoter branch → main..."
           EXISTING_NUMBER="$(gh pr list --base main --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number' || true)"
+          BODY_TEXT="$(cat "$BODY_FILE")"
           if [ -n "${EXISTING_NUMBER:-}" ] && [ "${EXISTING_NUMBER}" != "null" ]; then
             PR_NUMBER="$EXISTING_NUMBER"
-            echo "🔁 Reusing PR #$PR_NUMBER and updating title/body..."
-            gh api -X PATCH "repos/${REPO}/pulls/${PR_NUMBER}" -f title="$TITLE" -f body="$BODY_CONTENT" >/dev/null
+            echo "🔁 Reusing PR #$PR_NUMBER and updating title/body via API..."
+            gh api -X PATCH "repos/${REPO}/pulls/${PR_NUMBER}" -f title="$TITLE" -f body="$BODY_TEXT" >/dev/null
           else
-            echo "🆕 Creating PR base=main head=$HEAD_BRANCH..."
+            echo "🆕 Creating PR base=main head=$HEAD_BRANCH via API..."
             PR_NUMBER="$(gh api -X POST "repos/${REPO}/pulls" \
               -f title="$TITLE" \
               -f head="$HEAD_BRANCH" \
               -f base="main" \
-              -f body="$BODY_CONTENT" \
+              -f body="$BODY_TEXT" \
               --jq .number)"
           fi
 

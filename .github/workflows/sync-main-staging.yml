@@ -27,42 +27,52 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Sync main to staging
+      - name: Smart sync main to staging
         env:
-          GH_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
           echo "🔍 Verifying token is available..."
-          if [ -z "$GH_TOKEN" ]; then
+          if [ -z "$GITHUB_TOKEN" ]; then
             echo "❌ No token available!"
             exit 1
           fi
           echo "✅ Token is configured"
+          echo ""
 
           echo "🔍 Fetching latest main and staging branches..."
           git fetch origin main:origin-main staging:origin-staging
+          echo ""
 
-          echo "🔧 Configuring git for merge commit..."
+          echo "🔧 Configure git for sync commit..."
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          echo ""
 
           echo "🔄 Ensuring we're on latest staging..."
           git checkout staging
           git reset --hard origin-staging
+          echo ""
 
-          echo "🔀 Merging main into staging..."
-          echo "ℹ️  After squash merge to main, we always sync back to create a clean point"
-          git merge -s ours --no-ff -m "Sync: Merge main into staging after PR #${PR_NUMBER}" origin-main
+          # Create empty sync commit to mark the sync point
+          echo "🔀 Creating empty sync commit..."
+          echo "ℹ️  This empty commit marks the sync point without merge history"
+
+          # Get the current main SHA
+          MAIN_SHA=$(git rev-parse origin-main)
+          echo "📋 Main SHA: ${MAIN_SHA:0:7}"
+
+          # Create empty commit with main SHA in message
+          STAGING_SHA=$(git rev-parse HEAD)
+          git commit --allow-empty -m "Sync: main@${MAIN_SHA:0:7} after PR #${PR_NUMBER}"
+          echo "✅ Empty sync commit created"
 
           echo "⬆️ Pushing staging to remote..."
           # The token from actions/checkout should already be configured, but let's be explicit
-          git push https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git staging
-
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git staging
           echo "✅ Main successfully synced to staging!"
-          echo "🎯 Staging is now at the same point as main - ready for new development"
 
   delete-production-promoter-branch:
     name: Delete production promoter branch after PR merge to main
@@ -77,7 +87,7 @@ jobs:
 
       - name: Delete production promoter branch
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           echo "🧹 Deleting remote branch production-promoter if present..."
