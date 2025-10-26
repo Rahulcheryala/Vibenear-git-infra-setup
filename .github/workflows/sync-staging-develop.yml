@@ -40,54 +40,34 @@ jobs:
             exit 1
           fi
           echo "✅ Token is configured"
+          echo ""
 
           echo "🔍 Fetching latest develop and staging..."
           git fetch origin develop:origin-develop staging:origin-staging
+          echo ""
 
           echo "🔧 Configure git for merge commit..."
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          echo ""
 
           echo "🔄 Ensuring we're on latest develop..."
           git checkout develop
           git reset --hard origin-develop
+          echo ""
 
-          # Smart sync logic: Only sync when staging is ahead of develop
-          echo "🔍 Checking if sync is needed..."
-          # Check if staging has commits that develop doesn't have
-          STAGING_AHEAD=$(git rev-list --count HEAD..origin-staging)
-          DEVELOP_AHEAD=$(git rev-list --count origin-staging..HEAD)
-          echo "📊 Branch status:"
-          echo "  • Staging ahead of develop: $STAGING_AHEAD commits"
-          echo "  • Develop ahead of staging: $DEVELOP_AHEAD commits"
+          # Create empty sync commit to mark the sync point
+          echo "🔀 Creating empty sync commit..."
+          echo "ℹ️  This empty commit marks the sync point without merge history"
 
-          if [ "$STAGING_AHEAD" -eq 0 ]; then
-            echo "✅ Staging and develop are in sync - no sync needed!"
-            echo "🎯 This eliminates unnecessary sync commits in develop branch"
-            exit 0
-          fi
+          # Get the current staging SHA
+          STAGING_SHA=$(git rev-parse origin-staging)
+          echo "📋 Staging SHA: ${STAGING_SHA:0:7}"
 
-          if [ "$DEVELOP_AHEAD" -eq 0 ]; then
-            echo "✅ Fast-forward merge possible - no sync commit needed!"
-            echo "🎯 This eliminates unnecessary sync commits in develop branch"
-            git merge --ff-only origin-staging
-            echo "✅ Fast-forward merge completed"
-          else
-            echo "🔀 Branches have diverged - creating empty sync commit..."
-            echo "ℹ️  Creating empty commit to record staging SHA without merge history"
-            echo "📝 This prevents GitHub from expanding staging commits in develop PRs"
-
-            # Get the current staging SHA
-            STAGING_SHA=$(git rev-parse origin-staging)
-            echo "📋 Staging SHA: ${STAGING_SHA:0:7}"
-
-            # Create empty commit with staging SHA in message
-            git commit --allow-empty -m "Sync: staging@${STAGING_SHA:0:7} after PR #${PR_NUMBER}
-
-            # This empty commit marks the sync point between develop and staging.
-            echo "Develop remains at: $(git rev-parse HEAD)"
-            echo "✅ Empty sync commit created"
-          fi
+          # Create empty commit with staging SHA in message
+          DEVELOP_SHA=$(git rev-parse HEAD)
+          git commit --allow-empty -m "Sync: staging@${STAGING_SHA:0:7} after PR #${PR_NUMBER}"
+          echo "✅ Empty sync commit created"
 
           echo "⬆️ Pushing develop to remote..."
           # The token from actions/checkout should already be configured, but let's be explicit
