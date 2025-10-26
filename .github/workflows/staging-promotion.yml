@@ -341,6 +341,16 @@ jobs:
 
           echo "🔀 Applying grouped cherry-picks as squash commits"
           echo ""
+
+          # If updating existing PR, get list of existing squash commits
+          if [ "$EXISTING_PR" = "true" ]; then
+            echo "📋 Checking existing squash commits in promoter branch..."
+            EXISTING_GROUPS=$(git log origin/staging..HEAD --format=%s)
+            echo "   Existing groups:"
+            echo "$EXISTING_GROUPS" | sed 's/^/   - /'
+            echo ""
+          fi
+
           GROUPS_DATA='${{ needs.commit-analysis.outputs.groups }}'
           COMMITS_CREATED=0
           echo "$GROUPS_DATA" | while IFS='|' read -r group shas; do
@@ -348,6 +358,15 @@ jobs:
             [ -z "$shas" ] && continue
             echo "  • Group: $group"
             echo "    SHAs: $shas"
+
+            # Check if this group already exists as a squash commit
+            if [ "$EXISTING_PR" = "true" ]; then
+              if echo "$EXISTING_GROUPS" | grep -q "^${group}$"; then
+                echo "    ℹ️ Group already exists in promoter branch, skipping"
+                echo ""
+                continue
+              fi
+            fi
             echo ""
 
             # Sort commits chronologically within the group (oldest first)
@@ -369,12 +388,12 @@ jobs:
                 echo "    ℹ️ No changes introduced (commits already in staging), skipping"
               else
                 git commit -m "$group"
-                echo "    ✅ Created squash commit for $group"
+                echo "✅ Created squash commit for $group"
                 echo ""
                 COMMITS_CREATED=$((COMMITS_CREATED + 1))
               fi
             else
-              echo "    ⚠️ Cherry-pick failed, aborting"
+              echo "⚠️ Cherry-pick failed, aborting"
               git cherry-pick --abort || true
               exit 1
             fi
