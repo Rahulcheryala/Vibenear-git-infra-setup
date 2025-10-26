@@ -139,42 +139,28 @@ jobs:
 
           COMMIT_COUNT="${#SHAS_IN_RANGE[@]}"
 
-          # Group by staging promotion (merge commits from staging-promoter to staging)
+          # Group by feature head ref using GitHub API (first associated PR)
           declare -A GROUP_TO_SHAS
           declare -A GROUP_TO_PR
 
-          echo "🔍 Grouping commits by staging promotion..."
-
           for sha in "${SHAS_IN_RANGE[@]}"; do
-            # Find the staging promotion merge commit that contains this commit
-            # Look for merge commits in staging that include this SHA
-            group="misc/ungrouped"
-
-            # Search for merge commits in the range that could be staging promotions
-            for merge_commit in $(git rev-list --merges "$LOG_RANGE" 2>/dev/null || true); do
-              # Check if this SHA is reachable from the merge commit
-              if git merge-base --is-ancestor "$sha" "$merge_commit" 2>/dev/null; then
-                # Check if this is a staging promotion commit
-                merge_msg=$(git log -1 --format=%s "$merge_commit")
-                if echo "$merge_msg" | grep -qiE "staging.*promotion"; then
-                  group="$merge_commit"
-                  # Try to get PR link for this staging promotion
-                  pr_json="$(gh api -H "Accept: application/vnd.github+json" repos/${GITHUB_REPOSITORY}/commits/${merge_commit}/pulls --jq '.[0] | {url: .html_url}' 2>/dev/null || true)"
-                  if [ -n "$pr_json" ] && [ "$pr_json" != "null" ]; then
-                    pr_url="$(printf '%s' "$pr_json" | jq -r '.url // empty')"
-                    if [ -n "$pr_url" ] && [ -z "${GROUP_TO_PR[$group]:-}" ]; then
-                      GROUP_TO_PR[$group]="$pr_url"
-                    fi
-                  fi
-                  break
-                fi
-              fi
-            done
-
+            pr_json="$(gh api -H "Accept: application/vnd.github+json" repos/${GITHUB_REPOSITORY}/commits/${sha}/pulls --jq '.[0] | {url: .html_url, head: .head.ref}' 2>/dev/null || true)"
+            group=""
+            pr_url=""
+            if [ -n "$pr_json" ] && [ "$pr_json" != "null" ]; then
+              group="$(printf '%s' "$pr_json" | jq -r '.head // empty')"
+              pr_url="$(printf '%s' "$pr_json" | jq -r '.url // empty')"
+            fi
+            if [[ -z "$group" || ! "$group" =~ ^(feature|bugfix|hotfix)/ ]]; then
+              group="misc/ungrouped"
+            fi
             if [ -n "${GROUP_TO_SHAS[$group]:-}" ]; then
               GROUP_TO_SHAS[$group]="${GROUP_TO_SHAS[$group]} $sha"
             else
               GROUP_TO_SHAS[$group]="$sha"
+            fi
+            if [ -n "$pr_url" ] && [ -z "${GROUP_TO_PR[$group]:-}" ]; then
+              GROUP_TO_PR[$group]="$pr_url"
             fi
           done
           echo ""
@@ -234,18 +220,10 @@ jobs:
           for group in "${GROUP_NAMES[@]}"; do
             shas_line="${GROUP_TO_SHAS[$group]}"
             GROUPS_LINES+="$group|$shas_line"$'\n'
-
-            # Get group title
-            if [ "$group" = "misc/ungrouped" ]; then
-              GROUPED_MD+="#### misc/ungrouped"$'\n'
-            else
-              group_title=$(git log -1 --format=%s "$group")
-              GROUPED_MD+="#### $group_title"$'\n'
-            fi
-
+            GROUPED_MD+="#### $group"$'\n'
             pr_link="${GROUP_TO_PR[$group]:-}"
             if [ -n "$pr_link" ]; then
-              PROMOTION_PRS_MD+="- $group_title: $pr_link"$'\n'
+              PROMOTION_PRS_MD+="- $group: $pr_link"$'\n'
               GROUPED_MD+="PR: $pr_link"$'\n'
             fi
             for s in $shas_line; do
@@ -390,20 +368,10 @@ jobs:
 
             # Check if this group already exists as a squash commit
             if [ "$EXISTING_PR" = "true" ]; then
-              # For merge commits, check by commit message pattern
-              if [ "$group" != "misc/ungrouped" ]; then
-                group_title=$(git log -1 --format=%s "$group")
-                if echo "$EXISTING_GROUPS" | grep -qF "$group_title"; then
-                  echo "    ℹ️ Group already exists in promoter branch, skipping"
-                  echo ""
-                  continue
-                fi
-              else
-                if echo "$EXISTING_GROUPS" | grep -q "^misc/ungrouped$"; then
-                  echo "    ℹ️ Group already exists in promoter branch, skipping"
-                  echo ""
-                  continue
-                fi
+              if echo "$EXISTING_GROUPS" | grep -qF "$group"; then
+                echo "    ℹ️ Group already exists in promoter branch, skipping"
+                echo ""
+                continue
               fi
             fi
             echo ""
@@ -420,12 +388,8 @@ jobs:
               CHRONOLOGICAL_SHAS="$CHRONOLOGICAL_SHAS $chrono_sha"
             done < /tmp/chrono_shas.txt
 
-            # Determine commit message for this group
-            if [ "$group" = "misc/ungrouped" ]; then
-              COMMIT_MSG="misc/ungrouped"
-            else
-              COMMIT_MSG=$(git log -1 --format=%s "$group")
-            fi
+            # Determine commit message for this group (use the group name directly)
+            COMMIT_MSG="$group"
 
             # Cherry-pick commits without committing (in chronological order)
             if git cherry-pick -n $CHRONOLOGICAL_SHAS; then
