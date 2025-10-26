@@ -2,3 +2,4 @@ user: guest
 
 Checking if the sync commit is working
 Staging promotion is working, checking the sync point creation
+Bypass token added for sync commit onto develop branch
