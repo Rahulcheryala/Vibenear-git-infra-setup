@@ -25,7 +25,7 @@ jobs:
         with:
           ref: develop
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Smart sync staging to develop
         env:
