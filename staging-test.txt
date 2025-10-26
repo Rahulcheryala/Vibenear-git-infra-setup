@@ -1,4 +1,4 @@
-user: guest
+Removed the lines added by earlier commits
 
 Checking if the sync commit is working -- yes it is working fine
 Staging promotion is working, checking the sync point creation
