@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sync-staging-to-develop:
-    name: Sync staging and develop after PR merge
+  merge-staging-into-develop:
+    name: Merge staging into develop after PR merge
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
     steps:
@@ -27,65 +27,51 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Sync staging to develop
+      - name: Smart sync staging to develop
         env:
-          GH_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
           echo "🔍 Verifying token is available..."
-          if [ -z "$GH_TOKEN" ]; then
+          if [ -z "$GITHUB_TOKEN" ]; then
             echo "❌ No token available!"
             exit 1
           fi
           echo "✅ Token is configured"
+          echo ""
 
           echo "🔍 Fetching latest develop and staging..."
           git fetch origin develop:origin-develop staging:origin-staging
+          echo ""
 
-          echo "🔧 Configure git for merge commit..."
+          echo "🔧 Configure git for sync commit..."
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          echo ""
 
           echo "🔄 Ensuring we're on latest develop..."
           git checkout develop
           git reset --hard origin-develop
+          echo ""
 
-          # Smart sync logic: Only sync when staging is ahead of develop
-          echo "🔍 Checking if sync is needed..."
+          # Create empty sync commit to mark the sync point
+          echo "🔀 Creating empty sync commit..."
+          echo "ℹ️  This empty commit marks the sync point without merge history"
 
-          # Check if staging has commits that develop doesn't have
-          STAGING_AHEAD=$(git rev-list --count HEAD..origin-staging)
-          DEVELOP_AHEAD=$(git rev-list --count origin-staging..HEAD)
+          # Get the current staging SHA
+          STAGING_SHA=$(git rev-parse origin-staging)
+          echo "📋 Staging SHA: ${STAGING_SHA:0:7}"
 
-          echo "📊 Branch status:"
-          echo "  • Staging ahead of develop: $STAGING_AHEAD commits"
-          echo "  • Develop ahead of staging: $DEVELOP_AHEAD commits"
-
-          if [ "$STAGING_AHEAD" -eq 0 ]; then
-            echo "✅ Staging and develop are in sync - no sync needed!"
-            echo "🎯 This eliminates unnecessary sync commits in develop branch"
-            exit 0
-          fi
-
-          if [ "$DEVELOP_AHEAD" -eq 0 ]; then
-            echo "✅ Fast-forward merge possible - no sync commit needed!"
-            echo "🎯 This eliminates unnecessary sync commits in develop branch"
-            git merge --ff-only origin-staging
-            echo "✅ Fast-forward merge completed"
-          else
-            echo "🔀 Branches have diverged - creating sync commit..."
-            echo "ℹ️  After squash merge to staging, we sync back to create a clean point"
-            echo "⚠️  Note: This will create a sync commit to preserve develop's new commits"
-            git merge -s ours --no-ff -m "Sync: Merge staging into develop after PR #${PR_NUMBER}" origin-staging
-          fi
+          # Create empty commit with staging SHA in message
+          DEVELOP_SHA=$(git rev-parse HEAD)
+          git commit --allow-empty -m "Sync: staging@${STAGING_SHA:0:7} after PR #${PR_NUMBER}"
+          echo "✅ Empty sync commit created"
 
           echo "⬆️ Pushing develop to remote..."
           # The token from actions/checkout should already be configured, but let's be explicit
-          git push https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git develop
-
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git develop
           echo "✅ Staging successfully synced to develop!"
 
   delete-promoter-branch:
@@ -101,7 +87,7 @@ jobs:
 
       - name: Delete promoter branch staging-promoter
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           echo "🧹 Deleting remote branch staging-promoter if present..."
