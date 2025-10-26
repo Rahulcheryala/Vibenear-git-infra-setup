@@ -3,3 +3,7 @@ user: guest
 Checking if the sync commit is working
 Staging promotion is working, checking the sync point creation
 Bypass token added for sync commit onto develop branch
+Test commit to check if PR template is working or not
+PR template added to main and removing from develop
+
+Checking if the re-squash happens or not
