@@ -243,7 +243,7 @@ jobs:
 
             pr_link="${GROUP_TO_PR[$group]:-}"
             if [ -n "$pr_link" ]; then
-              PROMOTION_PRS_MD+="- $group_title: $pr_link"$'\n'
+              PROMOTION_PRS_MD+="- $pr_link"$'\n'
               GROUPED_MD+="PR: $pr_link"$'\n'
             fi
             for s in $shas_line; do
@@ -267,6 +267,7 @@ jobs:
           echo "  • Timestamp: $TIMESTAMP"
           echo ""
           echo "📝 Commits grouped by staging promotion:"
+          echo ""
           printf "%s\n" "$GROUPED_MD"
           echo ""
 
@@ -469,9 +470,7 @@ jobs:
             fi
 
             echo "### 📦 Features to be Deployed"
-            echo "\`\`\`"
-            echo "${{ needs.commit-analysis.outputs.grouped_commits_md }}" | sed 's/^####//' | sed 's/^PR:/  PR:/'
-            echo "\`\`\`"
+            echo "${{ needs.commit-analysis.outputs.grouped_commits_md }}"
             echo ""
 
             echo "$RELEASE_NOTES_SECTION"
