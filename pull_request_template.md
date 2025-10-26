@@ -1,6 +1,6 @@
 ### Description
 
-- TAIGA: https://tiaga.example.com/tickets/$%7BticketNumber%7D
+- TAIGA: https://tree.taiga.io/project/yaswanthkoneri-vibenear/us/${ticket_number}
 
 Short description that should answer: why and what.
 Description can include task context and links to slack or additional tickets or PRs.
