@@ -6,4 +6,4 @@ Bypass token added for sync commit onto develop branch
 Test commit to check if PR template is working or not
 PR template added to main and removing from develop
 
-Checking if the re-squash happens or not
+Removed this line for auth login in user app
