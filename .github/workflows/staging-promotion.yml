@@ -65,8 +65,8 @@ jobs:
           for commit in $(git rev-list HEAD | head -200); do
             # Check if this is an empty commit with sync message pattern
             if git show --format="%s" -s "$commit" | grep -q "^Sync: staging@"; then
-              # Verify it's an empty commit (no changes)
-              if git show --stat "$commit" | grep -q "0 files changed"; then
+              # Verify it's an empty commit (no file changes)
+              if [ -z "$(git diff-tree --no-commit-id --name-only -r "$commit")" ]; then
                 LAST_SYNC_SHA="$commit"
                 msg=$(git log -1 --format=%s "$commit")
                 echo "ℹ️ Found last staging→develop sync at: ${commit:0:9}"
