@@ -1,1 +1,3 @@
 user: guest
+
+Checking if the sync commit is working
