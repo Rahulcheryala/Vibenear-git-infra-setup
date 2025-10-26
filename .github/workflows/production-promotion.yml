@@ -370,6 +370,15 @@ jobs:
           echo "🔀 Creating squash commits for each staging promotion"
           echo ""
 
+          # If updating existing PR, get list of existing squash commits
+          if [ "$EXISTING_PR" = "true" ]; then
+            echo "📋 Checking existing squash commits in promoter branch..."
+            EXISTING_GROUPS=$(git log origin/main..HEAD --format=%s)
+            echo "   Existing groups:"
+            echo "$EXISTING_GROUPS" | sed 's/^/   - /'
+            echo ""
+          fi
+
           GROUPS_DATA='${{ needs.commit-analysis.outputs.groups }}'
           COMMITS_CREATED=0
 
@@ -383,6 +392,16 @@ jobs:
               COMMIT_MSG="misc/ungrouped"
             else
               COMMIT_MSG=$(git log -1 --format=%s "$group")
+            fi
+
+            # Check if this group already exists as a squash commit
+            if [ "$EXISTING_PR" = "true" ]; then
+              if echo "$EXISTING_GROUPS" | grep -qF "$COMMIT_MSG"; then
+                echo "  • Group: $COMMIT_MSG"
+                echo "    ℹ️ Group already exists in promoter branch, skipping"
+                echo ""
+                continue
+              fi
             fi
 
             echo "  • Processing: $COMMIT_MSG"
