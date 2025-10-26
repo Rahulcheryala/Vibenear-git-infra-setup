@@ -46,7 +46,7 @@ jobs:
           git fetch origin develop:origin-develop staging:origin-staging
           echo ""
 
-          echo "🔧 Configure git for merge commit..."
+          echo "🔧 Configure git for sync commit..."
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           echo ""
