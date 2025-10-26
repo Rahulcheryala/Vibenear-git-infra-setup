@@ -139,28 +139,39 @@ jobs:
 
           COMMIT_COUNT="${#SHAS_IN_RANGE[@]}"
 
-          # Group by feature head ref using GitHub API (first associated PR)
+          # Group by staging promotion merge commit
           declare -A GROUP_TO_SHAS
           declare -A GROUP_TO_PR
 
+          echo "🔍 Grouping commits by staging promotion..."
+
           for sha in "${SHAS_IN_RANGE[@]}"; do
-            pr_json="$(gh api -H "Accept: application/vnd.github+json" repos/${GITHUB_REPOSITORY}/commits/${sha}/pulls --jq '.[0] | {url: .html_url, head: .head.ref}' 2>/dev/null || true)"
-            group=""
-            pr_url=""
-            if [ -n "$pr_json" ] && [ "$pr_json" != "null" ]; then
-              group="$(printf '%s' "$pr_json" | jq -r '.head // empty')"
-              pr_url="$(printf '%s' "$pr_json" | jq -r '.url // empty')"
-            fi
-            if [[ -z "$group" || ! "$group" =~ ^(feature|bugfix|hotfix)/ ]]; then
-              group="misc/ungrouped"
-            fi
+            # Find the nearest parent merge commit that is a staging promotion
+            group="misc/ungrouped"
+
+            # Walk up the commit history to find the merge commit that introduced this SHA
+            for merge_commit in $(git rev-list --ancestry-path ${sha}..HEAD --merges --reverse 2>/dev/null || true); do
+              # Check if this merge commit has a staging promotion pattern
+              merge_msg=$(git log -1 --format=%s "$merge_commit")
+              if echo "$merge_msg" | grep -qiE "staging.*promotion"; then
+                # This is the staging promotion that brought in this commit
+                group="$merge_commit"
+                # Try to get PR link for this staging promotion
+                pr_json="$(gh api -H "Accept: application/vnd.github+json" repos/${GITHUB_REPOSITORY}/commits/${merge_commit}/pulls --jq '.[0] | {url: .html_url}' 2>/dev/null || true)"
+                if [ -n "$pr_json" ] && [ "$pr_json" != "null" ]; then
+                  pr_url="$(printf '%s' "$pr_json" | jq -r '.url // empty')"
+                  if [ -n "$pr_url" ] && [ -z "${GROUP_TO_PR[$group]:-}" ]; then
+                    GROUP_TO_PR[$group]="$pr_url"
+                  fi
+                fi
+                break
+              fi
+            done
+
             if [ -n "${GROUP_TO_SHAS[$group]:-}" ]; then
               GROUP_TO_SHAS[$group]="${GROUP_TO_SHAS[$group]} $sha"
             else
               GROUP_TO_SHAS[$group]="$sha"
-            fi
-            if [ -n "$pr_url" ] && [ -z "${GROUP_TO_PR[$group]:-}" ]; then
-              GROUP_TO_PR[$group]="$pr_url"
             fi
           done
           echo ""
@@ -220,10 +231,19 @@ jobs:
           for group in "${GROUP_NAMES[@]}"; do
             shas_line="${GROUP_TO_SHAS[$group]}"
             GROUPS_LINES+="$group|$shas_line"$'\n'
-            GROUPED_MD+="#### $group"$'\n'
+
+            # Get group title
+            if [ "$group" = "misc/ungrouped" ]; then
+              GROUPED_MD+="#### misc/ungrouped"$'\n'
+              group_title="misc/ungrouped"
+            else
+              group_title=$(git log -1 --format=%s "$group")
+              GROUPED_MD+="#### $group_title"$'\n'
+            fi
+
             pr_link="${GROUP_TO_PR[$group]:-}"
             if [ -n "$pr_link" ]; then
-              PROMOTION_PRS_MD+="- $group: $pr_link"$'\n'
+              PROMOTION_PRS_MD+="- $group_title: $pr_link"$'\n'
               GROUPED_MD+="PR: $pr_link"$'\n'
             fi
             for s in $shas_line; do
@@ -346,70 +366,48 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          echo "🔀 Applying grouped cherry-picks as squash commits"
+          echo "🔀 Creating squash commits for each staging promotion"
           echo ""
-
-          # If updating existing PR, get list of existing squash commits
-          if [ "$EXISTING_PR" = "true" ]; then
-            echo "📋 Checking existing squash commits in promoter branch..."
-            EXISTING_GROUPS=$(git log origin/main..HEAD --format=%s)
-            echo "   Existing groups:"
-            echo "$EXISTING_GROUPS" | sed 's/^/   - /'
-            echo ""
-          fi
 
           GROUPS_DATA='${{ needs.commit-analysis.outputs.groups }}'
           COMMITS_CREATED=0
+
+          # Process each staging promotion group
           echo "$GROUPS_DATA" | while IFS='|' read -r group shas; do
             [ -z "$group" ] && continue
             [ -z "$shas" ] && continue
-            echo "  • Group: $group"
+
+            # Determine commit message for this group
+            if [ "$group" = "misc/ungrouped" ]; then
+              COMMIT_MSG="misc/ungrouped"
+            else
+              COMMIT_MSG=$(git log -1 --format=%s "$group")
+            fi
+
+            echo "  • Processing: $COMMIT_MSG"
             echo "    SHAs: $shas"
 
-            # Check if this group already exists as a squash commit
-            if [ "$EXISTING_PR" = "true" ]; then
-              if echo "$EXISTING_GROUPS" | grep -qF "$group"; then
-                echo "    ℹ️ Group already exists in promoter branch, skipping"
-                echo ""
-                continue
-              fi
+            # For each staging promotion, we merge all its commits from staging
+            # Get the file state from staging after all commits in this group
+            LAST_SHA=$(echo "$shas" | awk '{print $NF}')
+
+            # Use git diff to get all changes from this staging promotion
+            # Get the parent of the first SHA to create the diff range
+            FIRST_SHA=$(echo "$shas" | awk '{print $1}')
+            PARENT_SHA=$(git rev-parse "${FIRST_SHA}^" 2>/dev/null || echo "origin/main")
+
+            # Apply the changes from this staging promotion
+            git diff "${PARENT_SHA}..${LAST_SHA}" | git apply --index
+
+            if ! git diff --cached --quiet; then
+              git commit -m "$COMMIT_MSG"
+              echo "    ✅ Created squash commit"
+              COMMITS_CREATED=$((COMMITS_CREATED + 1))
+            else
+              echo "    ℹ️ No changes to commit (already in main)"
             fi
             echo ""
-
-            # Sort commits chronologically within the group (oldest first)
-            CHRONOLOGICAL_SHAS=""
-            for sha in $shas; do
-              commit_date=$(git log -1 --format=%ct "$sha" 2>/dev/null || echo "0")
-              echo "${commit_date} ${sha}"
-            done | sort -n | cut -d' ' -f2- > /tmp/chrono_shas.txt
-
-            # Read the sorted SHAs back into the variable
-            while read -r chrono_sha; do
-              CHRONOLOGICAL_SHAS="$CHRONOLOGICAL_SHAS $chrono_sha"
-            done < /tmp/chrono_shas.txt
-
-            # Determine commit message for this group (use the group name directly)
-            COMMIT_MSG="$group"
-
-            # Cherry-pick commits without committing (in chronological order)
-            if git cherry-pick -n $CHRONOLOGICAL_SHAS; then
-              # Check if there are any changes to commit
-              if git diff --cached --quiet; then
-                echo "    ℹ️ No changes introduced (commits already in main), skipping"
-              else
-                git commit -m "$COMMIT_MSG"
-                echo "✅ Created squash commit for $COMMIT_MSG"
-                echo ""
-                COMMITS_CREATED=$((COMMITS_CREATED + 1))
-              fi
-            else
-              echo "⚠️ Cherry-pick failed, aborting"
-              git cherry-pick --abort || true
-              exit 1
-            fi
           done
-          echo ""
-          echo ""
 
           # Check if promoter branch has any new commits compared to main
           COMMITS_AHEAD=$(git rev-list --count origin/main..HEAD)
