@@ -8,3 +8,4 @@ PR template added to main and removing from develop
 
 Removed this line for auth login in user app
 Removed the added lines
+This is the final change
