@@ -241,7 +241,6 @@ jobs:
           echo ""
 
           echo "📝 Commits to be promoted to staging (grouped):"
-          echo "🧩 Commits Grouped by Feature"
           printf "%s\n" "$GROUPED_MD"
           echo ""
 
