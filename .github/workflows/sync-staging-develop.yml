@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  merge-staging-into-develop:
-    name: Merge staging into develop after PR merge
+  sync-staging-to-develop:
+    name: Sync staging and develop after PR merge
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
     steps:
@@ -27,7 +27,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Smart sync staging to develop
+      - name: Sync staging to develop
         env:
           GITHUB_TOKEN: ${{ secrets.BYPASS_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -42,7 +42,7 @@ jobs:
           echo "✅ Token is configured"
           echo ""
 
-          echo "🔍 Fetching latest develop and staging..."
+          echo "🔍 Fetching latest develop and staging branches..."
           git fetch origin develop:origin-develop staging:origin-staging
           echo ""
 
@@ -85,7 +85,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Delete promoter branch staging-promoter
+      - name: Delete staging promoter branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
